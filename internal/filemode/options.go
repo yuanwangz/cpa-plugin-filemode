@@ -21,8 +21,8 @@ const (
 const (
 	DefaultToolName    = "submit_reply"
 	DefaultPlaceholder = "[message text in the attached file {name}]"
-	DefaultInstruction = "\n\nWrite your complete reply to the message(s) above and submit it with the {tool} tool (argument: content). That call must be the only tool call in that step; its content is exactly what the user receives."
-	DefaultToolDesc    = "Submit your complete reply to the user. The content is delivered to them verbatim as your answer (Markdown allowed). Call it alone, as the only tool call in that step."
+	DefaultInstruction = "\n\nThis turn is in file mode: you must reply to the message(s) above by calling the {tool} tool (argument: content), never as plain text. Other tools stay available for the work before that; when you reply, that call must be the only tool call in that step, and its content is exactly what the user receives."
+	DefaultToolDesc    = "Submit your complete reply to the user. In file mode every reply must go through this tool, not plain text. The content is delivered to them verbatim as your answer (Markdown allowed). Call it alone, as the only tool call in that step."
 	contentArgDesc     = "The complete reply, exactly as the user should receive it."
 )
 

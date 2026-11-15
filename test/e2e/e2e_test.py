@@ -232,7 +232,7 @@ def test_reply(fmt, up, stream, inline=False):
     rec = ups[0]
     check("[%s] prefix stripped (upstream model %s)" % (tag, upstream_model(rec)), upstream_model(rec) == "%s-reply" % up, upstream_model(rec))
     check("[%s] submit_reply tool injected" % tag, TOOL in json.dumps(rec["body"]), "")
-    check("[%s] instruction appended" % tag, "submit it with the submit_reply tool" in json.dumps(rec["body"]), "")
+    check("[%s] instruction appended" % tag, "by calling the submit_reply tool" in json.dumps(rec["body"]), "")
     if inline:
         check("[%s] text kept inline (translator would drop the file)" % tag, not attachments(rec["body"]) and "你好" in upstream_text(rec["body"]), attachments(rec["body"]))
         want = "INLINE-ECHO"

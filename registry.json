@@ -6,7 +6,7 @@
       "name": "File Mode",
       "description": "For models requested with a configurable prefix (default file-), sends the new user turn as .md file attachments and turns the model's submit_reply tool call back into a plain text reply. Works across OpenAI-compatible, Codex, Claude and Gemini upstreams.",
       "author": "yuanwangz",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "repository": "https://github.com/yuanwangz/cpa-plugin-filemode",
       "homepage": "https://github.com/yuanwangz/cpa-plugin-filemode",
       "tags": ["Interceptor"],
