@@ -4,15 +4,18 @@
     {
       "id": "filemode",
       "name": "File Mode",
-      "description": "For models requested with a configurable prefix (default file-), replaces the text of the new user turn with file names answered by a read_message call the model has already made, and turns the model's submit_reply tool call back into a plain text reply. Works across OpenAI-compatible, Codex, Claude and Gemini upstreams.",
+      "description": "For models requested with a configurable prefix (default file-), replaces the text of the new user turn with file names answered by a read_message call the model has already made, and turns the model's submit_reply tool call back into a plain text reply. Works across OpenAI-compatible, Codex, Claude and Gemini upstreams. Keeps the last few file-mode requests in memory (inbound and reply verdicts) for a management menu page.",
       "author": "yuanwangz",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "repository": "https://github.com/yuanwangz/cpa-plugin-filemode",
       "homepage": "https://github.com/yuanwangz/cpa-plugin-filemode",
-      "tags": ["Interceptor"],
+      "tags": [
+        "Interceptor"
+      ],
       "locales": {
         "zh-CN": {
-          "description": "模型名带指定前缀（默认 file-）时，把本轮新用户消息的正文换成文件名，并补上一次「模型已调用 read_message」及其返回（正文在返回里），并把模型的 submit_reply 工具调用还原成普通文字回复。上游为 OpenAI 兼容、Codex、Claude、Gemini 均可用。"
+          "description": "模型名带指定前缀（默认 file-）时，把本轮新用户消息的正文换成文件名，并补上一次「模型已调用 read_message」及其返回（正文在返回里），并把模型的 submit_reply 工具调用还原成普通文字回复。上游为 OpenAI 兼容、Codex、Claude、Gemini 均可用。在内存里保留最近几条文件模式请求（入站处理和回复是否正常），可在管理界面的插件菜单查看。",
+          "name": "文件模式"
         }
       }
     }

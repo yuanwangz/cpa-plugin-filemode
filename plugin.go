@@ -12,11 +12,12 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	"github.com/yuanwangz/cpa-plugin-filemode/internal/filemode"
+	"github.com/yuanwangz/cpa-plugin-filemode/internal/recent"
 	"gopkg.in/yaml.v3"
 )
 
 // pluginVersion is overridden at release build time: -ldflags "-X main.pluginVersion=<ver>".
-var pluginVersion = "0.2.0"
+var pluginVersion = "0.3.0"
 
 const (
 	pluginName     = "filemode"
@@ -29,14 +30,15 @@ const (
 var executorFormats = []string{filemode.FormatResponses, filemode.FormatChat, filemode.FormatClaude}
 
 type pluginConfig struct {
-	Prefix         string   `yaml:"prefix"`
-	ToolName       string   `yaml:"tool_name"`
-	ReadToolName   string   `yaml:"read_tool_name"`
-	Fallback       *bool    `yaml:"fallback"`
-	MaxReads       *int     `yaml:"max_reads"`
-	ListModels     string   `yaml:"list_models"`
-	Models         []string `yaml:"models"`
-	DebugLog       bool     `yaml:"debug_log"`
+	Prefix       string   `yaml:"prefix"`
+	ToolName     string   `yaml:"tool_name"`
+	ReadToolName string   `yaml:"read_tool_name"`
+	Fallback     *bool    `yaml:"fallback"`
+	MaxReads     *int     `yaml:"max_reads"`
+	ListModels   string   `yaml:"list_models"`
+	Models       []string `yaml:"models"`
+	DebugLog     bool     `yaml:"debug_log"`
+	RecentSize   *int     `yaml:"recent_size"`
 }
 
 type config struct {
@@ -44,14 +46,15 @@ type config struct {
 	toolName   string
 	readTool   string
 	fallback   bool
-	maxReads   int // times a request is sent again when the model calls the read tool itself
+	maxReads   int    // times a request is sent again when the model calls the read tool itself
 	listModels string // auto | config | off
 	models     []string
 	debug      bool
+	recentSize int // records kept in memory for the management page (0 = off)
 }
 
 func defaultConfig() config {
-	return config{prefix: "file-", toolName: filemode.DefaultToolName, readTool: filemode.DefaultReadToolName, fallback: true, maxReads: 2, listModels: "auto"}
+	return config{prefix: "file-", toolName: filemode.DefaultToolName, readTool: filemode.DefaultReadToolName, fallback: true, maxReads: 2, listModels: "auto", recentSize: 20}
 }
 
 var current atomic.Pointer[config]
@@ -112,6 +115,12 @@ func parseConfig(raw []byte) (config, error) {
 		}
 	}
 	cfg.debug = pc.DebugLog
+	if pc.RecentSize != nil {
+		if *pc.RecentSize < 0 || *pc.RecentSize > 500 {
+			return cfg, fmt.Errorf("filemode: recent_size must be 0..500, got %d", *pc.RecentSize)
+		}
+		cfg.recentSize = *pc.RecentSize
+	}
 	return cfg, nil
 }
 
@@ -141,6 +150,7 @@ type capabilities struct {
 	ExecutorModelScope    string   `json:"executor_model_scope"`
 	ExecutorInputFormats  []string `json:"executor_input_formats"`
 	ExecutorOutputFormats []string `json:"executor_output_formats"`
+	ManagementAPI         bool     `json:"management_api"`
 }
 
 func handleMethod(method string, req []byte) []byte {
@@ -157,6 +167,7 @@ func handleMethod(method string, req []byte) []byte {
 			return errorEnvelope("invalid_config", err.Error(), 0)
 		}
 		current.Store(&cfg)
+		history.Resize(cfg.recentSize)
 		return okEnvelope(buildRegistration(cfg))
 	case pluginabi.MethodPluginShutdown, pluginabi.MethodPluginQuiesce:
 		return okEnvelope(struct{}{})
@@ -172,6 +183,10 @@ func handleMethod(method string, req []byte) []byte {
 		return executeStream(req)
 	case pluginabi.MethodExecutorCountTokens:
 		return countTokens(req)
+	case pluginabi.MethodManagementRegister:
+		return registerManagement(req)
+	case pluginabi.MethodManagementHandle:
+		return handleManagement(req)
 	}
 	return errorEnvelope("unknown_method", "unknown method: "+method, 0)
 }
@@ -185,14 +200,15 @@ func buildRegistration(cfg config) registration {
 			Author:           "yuanwangz",
 			GitHubRepository: "https://github.com/yuanwangz/cpa-plugin-filemode",
 			ConfigFields: []pluginapi.ConfigField{
-				{Name: "prefix", Type: pluginapi.ConfigFieldTypeString, Default: "file-", Description: "Model-name prefix that turns file mode on; file-gpt-5.5 runs as gpt-5.5. Requests without it are untouched."},
-				{Name: "tool_name", Type: pluginapi.ConfigFieldTypeString, Default: filemode.DefaultToolName, Description: "Name of the injected reply tool (argument: content)."},
-				{Name: "read_tool_name", Type: pluginapi.ConfigFieldTypeString, Default: filemode.DefaultReadToolName, Description: "Name of the read tool. The request carries one call of it, already answered with the message text; the plugin answers any further call itself."},
-				{Name: "max_reads", Type: pluginapi.ConfigFieldTypeInteger, Default: 2, Description: "How many times a request is sent again when the model calls the read tool itself (0 = never; the call is then dropped)."},
-				{Name: "fallback", Type: pluginapi.ConfigFieldTypeBoolean, Default: true, Description: "When the upstream rejects the rewritten request (HTTP 400/413/415/422), resend the original request once."},
-				{Name: "list_models", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"auto", "config", "off"}, Default: "auto", Description: "Prefixed aliases in /v1/models: auto = every model CPA knows plus models, config = only models, off = none. Refreshed when the config reloads."},
-				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Default: []string{}, Description: "Base model names to list with the prefix in /v1/models."},
-				{Name: "debug_log", Type: pluginapi.ConfigFieldTypeBoolean, Default: false, Description: "Log one line per file-mode request (format, model, files, fallback). Never logs request or response bodies."},
+				{Name: "prefix", Type: pluginapi.ConfigFieldTypeString, Default: "file-", Description: "开启文件模式的模型名前缀：请求 file-gpt-5.5 实际按 gpt-5.5 发出。不带这个前缀的请求不受影响。"},
+				{Name: "tool_name", Type: pluginapi.ConfigFieldTypeString, Default: filemode.DefaultToolName, Description: "注入给模型的回复工具名（参数 content）。模型调用它回复，插件再把它还原成普通文字回复。"},
+				{Name: "read_tool_name", Type: pluginapi.ConfigFieldTypeString, Default: filemode.DefaultReadToolName, Description: "读取工具名。请求里会补上一次「模型已调用它」及其返回（返回里就是本轮消息正文）；模型再调用时由插件自己作答。须与回复工具名不同。"},
+				{Name: "max_reads", Type: pluginapi.ConfigFieldTypeInteger, Default: 2, Description: "模型自己又调用读取工具时，插件作答后重发请求的最多次数（0 = 不重发，这次调用直接丢掉）。范围 0–5。"},
+				{Name: "fallback", Type: pluginapi.ConfigFieldTypeBoolean, Default: true, Description: "上游拒收改写后的请求（HTTP 400/413/415/422）时，改用原始请求重发一次。"},
+				{Name: "list_models", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"auto", "config", "off"}, Default: "auto", Description: "/v1/models 里列出带前缀的别名：auto = CPA 已知的全部模型加上 models，config = 只列 models，off = 不列。配置重新加载时刷新。"},
+				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Default: []string{}, Description: "要在 /v1/models 里加前缀列出的基础模型名。"},
+				{Name: "debug_log", Type: pluginapi.ConfigFieldTypeBoolean, Default: false, Description: "每个文件模式请求写一行日志（格式、模型、文件数、是否退回原请求）。从不记录请求和回复的正文。"},
+				{Name: "recent_size", Type: pluginapi.ConfigFieldTypeInteger, Default: 20, Description: "在内存里保留最近多少条文件模式请求的记录，供管理界面的「文件模式 · 最近请求」页查看（0 = 不记录，最多 500）。重启后清空，不记录正文。"},
 			},
 		},
 		Capabilities: capabilities{
@@ -202,6 +218,7 @@ func buildRegistration(cfg config) registration {
 			ExecutorModelScope:    string(pluginapi.ExecutorModelScopeStatic),
 			ExecutorInputFormats:  executorFormats,
 			ExecutorOutputFormats: executorFormats,
+			ManagementAPI:         true,
 		},
 	}
 }
@@ -288,7 +305,7 @@ func registerModels() []byte {
 	for _, id := range ids {
 		models = append(models, pluginapi.ModelInfo{
 			ID: cfg.prefix + id, Object: "model", Created: now, OwnedBy: modelsProvider,
-			DisplayName: cfg.prefix + id, Description: "File mode: " + id + " reading the new user turn through a tool",
+			DisplayName: cfg.prefix + id, Description: "文件模式：" + id + "（本轮新消息经工具读取）",
 			UserDefined: true,
 		})
 	}
@@ -328,9 +345,10 @@ type prepared struct {
 	send     []byte
 	rewrite  filemode.RewriteResult
 	req      rpcExecutorRequest
+	rec      *recent.Record // the management page's record of this request (nil when off)
 }
 
-func prepare(raw []byte) (*prepared, []byte) {
+func prepare(raw []byte, record bool) (*prepared, []byte) {
 	var req rpcExecutorRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, errorEnvelope("invalid_request", err.Error(), http.StatusBadRequest)
@@ -351,8 +369,58 @@ func prepare(raw []byte) (*prepared, []byte) {
 	if p.rewrite.Rewritten {
 		p.send = p.rewrite.Body
 	}
-	logf(cfg, "info", "request", map[string]any{"format": format, "model": model, "stream": req.Stream, "rewritten": p.rewrite.Rewritten, "files": len(p.rewrite.Files), "skip_reason": p.rewrite.Reason})
+	if record {
+		in, reply := recent.InRewritten, recent.ReplyPending
+		if !p.rewrite.Rewritten {
+			in = recent.InSkipped
+		}
+		p.rec = history.Start(recent.Record{
+			Model: strings.TrimSpace(req.Model), Format: format, Stream: req.Stream,
+			Client:  recent.Clip(req.Headers.Get("User-Agent"), 80),
+			Inbound: in, Note: p.rewrite.Reason, Files: len(p.rewrite.Files), Reply: reply,
+		})
+	}
+	logf(cfg, "info", "request", map[string]any{"id": p.recID(), "format": format, "model": model, "stream": req.Stream, "rewritten": p.rewrite.Rewritten, "files": len(p.rewrite.Files), "skip_reason": p.rewrite.Reason})
 	return p, nil
+}
+
+func (p *prepared) recID() string {
+	if p.rec == nil {
+		return "-"
+	}
+	return p.rec.ID
+}
+
+// fellBack records that the upstream refused the rewritten request and the original went instead.
+func (p *prepared) fellBack(err error) {
+	note := err.Error()
+	if he, ok := err.(*hostError); ok {
+		note = fmt.Sprintf("HTTP %d: %s", he.Status, he.Message)
+	}
+	history.Update(p.rec, func(r *recent.Record) { r.Inbound, r.Note = recent.InFallback, recent.Clip(note, 200) })
+}
+
+func (p *prepared) read() { history.Update(p.rec, func(r *recent.Record) { r.Reads++ }) }
+
+// failed closes the record with an upstream or stream error.
+func (p *prepared) failed(err error) {
+	status := 0
+	if he, ok := err.(*hostError); ok {
+		status = he.Status
+	}
+	history.Finish(p.rec, recent.ReplyError, status, err.Error())
+}
+
+// replied closes the record: rewritten requests report whether the reply tool was used.
+func (p *prepared) replied(rewritten, viaTool bool) {
+	reply := recent.ReplyPass
+	if rewritten {
+		reply = recent.ReplyPlain
+		if viaTool {
+			reply = recent.ReplyTool
+		}
+	}
+	history.Finish(p.rec, reply, 0, "")
 }
 
 func (p *prepared) hostRequest(body []byte, stream bool) hostModelRequest {
@@ -411,7 +479,7 @@ func cleanHeaders(h http.Header) http.Header {
 }
 
 func execute(raw []byte) []byte {
-	p, errEnv := prepare(raw)
+	p, errEnv := prepare(raw, true)
 	if errEnv != nil {
 		return errEnv
 	}
@@ -419,7 +487,8 @@ func execute(raw []byte) []byte {
 	send := p.send
 	resp, err := hostExecute(p.hostRequest(send, false))
 	if err != nil && rewritten && p.cfg.fallback && rejected(err) {
-		logf(p.cfg, "warn", "upstream rejected the file-mode request, resending the original once", map[string]any{"format": p.format, "model": p.model, "error": truncate(err.Error(), 300)})
+		logf(p.cfg, "warn", "upstream rejected the file-mode request, resending the original once", map[string]any{"id": p.recID(), "format": p.format, "model": p.model, "error": truncate(err.Error(), 300)})
+		p.fellBack(err)
 		rewritten = false
 		resp, err = hostExecute(p.hostRequest(p.original, false))
 	}
@@ -436,18 +505,21 @@ func execute(raw []byte) []byte {
 			}
 			send = filemode.AppendReadCall(p.format, send, p.cfg.options(), id, c.Args, p.rewrite.Files)
 		}
-		logf(p.cfg, "info", "model called the read tool, answered and sent again", map[string]any{"format": p.format, "model": p.model, "calls": len(calls)})
+		logf(p.cfg, "info", "model called the read tool, answered and sent again", map[string]any{"id": p.recID(), "format": p.format, "model": p.model, "calls": len(calls)})
+		p.read()
 		resp, err = hostExecute(p.hostRequest(send, false))
 	}
 	if err != nil {
+		p.failed(err)
 		return errorFrom(err)
 	}
 	body := resp.Body
+	restored := false
 	if rewritten {
-		var restored bool
 		body, restored = filemode.Restore(p.format, body, p.cfg.tools())
-		logf(p.cfg, "info", "response", map[string]any{"format": p.format, "model": p.model, "restored": restored})
+		logf(p.cfg, "info", "response", map[string]any{"id": p.recID(), "format": p.format, "model": p.model, "restored": restored})
 	}
+	p.replied(rewritten, restored)
 	return okEnvelope(pluginapi.ExecutorResponse{Payload: body, Headers: cleanHeaders(resp.Headers)})
 }
 
@@ -502,7 +574,7 @@ type streamClose struct {
 }
 
 func executeStream(raw []byte) []byte {
-	p, errEnv := prepare(raw)
+	p, errEnv := prepare(raw, true)
 	if errEnv != nil {
 		return errEnv
 	}
@@ -512,11 +584,13 @@ func executeStream(raw []byte) []byte {
 	rewritten := p.rewrite.Rewritten
 	resp, err := hostStream(p.hostRequest(p.send, true))
 	if err != nil && rewritten && p.cfg.fallback && rejected(err) {
-		logf(p.cfg, "warn", "upstream rejected the file-mode request, resending the original once", map[string]any{"format": p.format, "model": p.model, "error": truncate(err.Error(), 300)})
+		logf(p.cfg, "warn", "upstream rejected the file-mode request, resending the original once", map[string]any{"id": p.recID(), "format": p.format, "model": p.model, "error": truncate(err.Error(), 300)})
+		p.fellBack(err)
 		rewritten = false
 		resp, err = hostStream(p.hostRequest(p.original, true))
 	}
 	if err != nil {
+		p.failed(err)
 		return errorFrom(err)
 	}
 	go pump(p, rewritten, resp.StreamID)
@@ -544,14 +618,24 @@ func readChunk(in string) (pluginapi.HostModelStreamReadResponse, error) {
 func pump(p *prepared, rewritten bool, in string) {
 	out := p.req.StreamID
 	errMsg := ""
+	clientGone := false
+	var restorer filemode.StreamRestorer
 	defer func() {
 		if rec := recover(); rec != nil {
 			errMsg = fmt.Sprintf("filemode stream panic: %v", rec)
 		}
+		switch {
+		case errMsg != "":
+			p.failed(fmt.Errorf("%s", errMsg))
+		case clientGone:
+			history.Finish(p.rec, recent.ReplyError, 0, "下游客户端已断开")
+		default:
+			p.replied(rewritten, restorer != nil && restorer.Replied())
+		}
 		closeHostStream(in)
 		_, _ = callHost(pluginabi.MethodHostStreamClose, streamClose{StreamID: out, Error: errMsg})
 	}()
-	restorer := filemode.NewStreamRestorer("", filemode.Tools{})
+	restorer = filemode.NewStreamRestorer("", filemode.Tools{})
 	if rewritten {
 		restorer = filemode.NewStreamRestorer(p.format, p.cfg.tools())
 	}
@@ -561,6 +645,7 @@ func pump(p *prepared, rewritten bool, in string) {
 				continue
 			}
 			if _, err := callHost(pluginabi.MethodHostStreamEmit, streamEmit{StreamID: out, Payload: c}); err != nil {
+				clientGone = true
 				return false
 			}
 		}
@@ -597,7 +682,8 @@ func pump(p *prepared, rewritten bool, in string) {
 					closeHostStream(in)
 					reads++
 					send = filemode.AppendReadCall(p.format, send, p.cfg.options(), filemode.ReadCallID(1+reads), "{}", p.rewrite.Files)
-					logf(p.cfg, "info", "model called the read tool, answered and sent again", map[string]any{"format": p.format, "model": p.model, "stream": true})
+					logf(p.cfg, "info", "model called the read tool, answered and sent again", map[string]any{"id": p.recID(), "format": p.format, "model": p.model, "stream": true})
+					p.read()
 					resp, err := hostStream(p.hostRequest(send, true))
 					if err != nil {
 						in = ""
@@ -636,7 +722,7 @@ func pump(p *prepared, rewritten bool, in string) {
 // (about 4 bytes per token of the original request): the host offers no
 // callback that counts on another model.
 func countTokens(raw []byte) []byte {
-	p, errEnv := prepare(raw)
+	p, errEnv := prepare(raw, false)
 	if errEnv != nil {
 		return errEnv
 	}

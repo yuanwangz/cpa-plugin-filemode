@@ -312,6 +312,61 @@ def test_gemini_client(stream):
     check("[%s] reply restored as text" % tag, "".join(texts) == "ECHO:" + TXT and not calls and TOOL not in raw, raw[:800])
 
 
+def recent(key="mgmt-secret"):
+    req = urllib.request.Request(BASE + "/v0/management/filemode/recent", headers={"Authorization": "Bearer " + key} if key else {})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        return e.code, None
+
+
+def newest(model):
+    st, j = recent()
+    for r in (j or {}).get("records", []):
+        if r["model"] == model:
+            return r
+    return None
+
+
+def test_recent():
+    """Recent-request records: one per file-mode request, with the inbound and reply verdicts."""
+    import time
+    st, _ = recent(key=None)
+    check("[recent] needs the management key", st in (401, 403), st)
+    post(*body_for("chat", "oa-reply", TXT, False))  # no prefix: not recorded
+    cases = [
+        ("chat", "file-oa-reply", False, "rewritten", "tool", 0),
+        ("responses", "file-cx-reply", True, "rewritten", "tool", 0),
+        ("claude", "file-cl-text", False, "rewritten", "plain", 0),
+        ("chat", "file-oa-reread", True, "rewritten", "tool", 1),
+        ("responses", "file-oa-reject", False, "fallback", "pass", 0),
+    ]
+    for fmt, model, stream, inbound, reply, reads in cases:
+        path, body = body_for(fmt, model, TXT, stream)
+        post(path, body, stream)
+        time.sleep(0.3)  # the stream record closes when the pump ends
+        r = newest(model)
+        ok = r is not None and r["inbound"] == inbound and r["reply"] == reply and r["reads"] == reads and r["stream"] == stream and r["duration_ms"] >= 0
+        if ok and inbound == "rewritten":
+            ok = r["files"] == 1
+        if ok and inbound == "fallback":
+            ok = "400" in r.get("note", "")
+        check("[recent] %s %s: inbound %s, reply %s, reads %d" % (model, "stream" if stream else "non-stream", inbound, reply, reads), ok, r)
+    st, j = recent()
+    models = [r["model"] for r in j["records"]]
+    check("[recent] newest first, unprefixed requests not recorded, size %s" % j["size"],
+          models[0] == "file-oa-reject" and "oa-reply" not in models and len(models) <= j["size"] == 20, models[:6])
+    check("[recent] client recorded (User-Agent)", all(r.get("client") for r in j["records"][:5]), j["records"][:1])
+    check("[recent] no bodies in the records", TXT not in json.dumps(j, ensure_ascii=False), "")
+    try:
+        with urllib.request.urlopen(BASE + "/v0/resource/plugins/filemode/recent", timeout=10) as r:
+            page, ctype = r.read().decode(), r.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as e:
+        page, ctype = "HTTP %d" % e.code, ""
+    check("[recent] management page served, no data inside", "text/html" in ctype and 'const API="/v0/management/filemode/recent"' in page and "file-oa" not in page, (ctype, page[:200]))
+
+
 def main():
     test_models()
     test_passthrough()
@@ -331,6 +386,7 @@ def main():
             test_reread(fmt, up, stream)
         for fmt, up in (("responses", "oa"), ("chat", "oa"), ("claude", "cl"), ("responses", "gm"), ("chat", "cx")):
             test_reject(fmt, up, stream)
+    test_recent()
     passed = sum(1 for _, ok in results if ok)
     print("\nSUMMARY: %d/%d passed" % (passed, len(results)))
     sys.exit(0 if passed == len(results) else 1)

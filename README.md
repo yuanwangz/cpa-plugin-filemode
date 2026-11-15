@@ -75,14 +75,31 @@ plugins:
       fallback: true             # 上游拒收（400/413/415/422）时用原始请求重发一次
       list_models: "auto"        # /v1/models 别名：auto = CPA 已知的全部模型 + models；config = 只列 models；off = 不列
       models: []                 # 额外要列出的基础模型名
-      debug_log: false           # 每个文件模式请求记一行（格式、模型、文件数、是否回退/重读），从不记正文
+      debug_log: false           # 每个文件模式请求记一行（编号、格式、模型、文件数、是否回退/重读），从不记正文
+      recent_size: 20            # 内存里保留最近多少条请求记录给管理界面看（0 = 不记，最多 500）
 ```
+
+管理界面里每个配置项的说明是中文的（CPA 的插件配置说明只有一种语言）。
 
 旧配置里的 `upstream_fixups` 不再起作用，留着也不报错。
 
 动态库文件名决定插件 ID：放在 `plugins/<GOOS>/<GOARCH>/filemode.so`（或 `plugins/filemode.so`），配置键就是 `filemode`。
 
 「文件」只是给模型看的名字，插件不落盘，所以没有 `keep_files` 选项。
+
+## 最近请求（可观测性）
+
+插件在内存里保留最近 `recent_size` 条（默认 20）经过文件模式的请求，不落盘、不加数据库，重启 CPA 后清空，也不记录请求和回复的正文。不带前缀的请求不记。
+
+每条记录：时间、编号（和 `debug_log` 日志行里的 `id` 对得上）、请求的模型（带前缀）、格式、是否流式、客户端（User-Agent）、耗时，以及两个结论：
+
+- **入站处理**：`正常`（本轮正文换成了 N 个文件，模型又自己读了几次）/ `未改写`（附原因，比如 `tool_choice none`、没有新用户消息）/ `被上游拒绝`（已退回原请求，附上游状态码和信息）。
+- **回复**：`正常`（模型调了 `submit_reply`，已还原成文字）/ `直接回文字`（没走回复工具，原样转发）/ `原样转发`（这次没改写）/ `失败`（上游错误或流中断，附原因）/ `进行中`。
+
+两处都能看：
+
+- 管理界面的插件菜单「文件模式 · 最近请求」（`/v0/resource/plugins/filemode/recent`）。CPA 的插件资源页不经管理鉴权，所以这一页里没有数据：填一次管理密钥（只存在这个浏览器的 localStorage），页面再带着密钥去取，可勾选每 5 秒自动刷新。
+- 管理 API `GET /v0/management/filemode/recent`（需要管理密钥），返回 `{ "size": 20, "records": [...] }`，最新的在前。
 
 ## 构建
 
@@ -99,8 +116,9 @@ CPA 本体也必须是 CGO 构建（管理接口响应头 `X-CPA-SUPPORT-PLUGIN:
 
 ## 测试
 
+- `internal/recent/*_test.go`：环形记录（最新在前、缩容、0 = 不记）、错误截断、菜单页嵌入接口路径。
 - `internal/filemode/*_test.go`：请求改写（三种格式、轮次判定、工具循环里补的调用位置、`tool_choice: none`、重名工具、cache_control 挪到工具返回上）、读工具的返回和追加、非流式里「只调了读工具」的判定、流式闸门、非流式和三种流式还原（含混合调用、读调用去掉、工具序号重排、Codex 的 event/data 分块）。
-- `test/e2e/`：`mock_upstream.py` 同时扮演 OpenAI 兼容、Codex、Claude、Gemini 四种上游；`e2e_test.py` 覆盖不带前缀原样、带前缀剥离 + 正文只在读工具返回里 + 注入工具、非流式和流式还原、混合调用、直接回文字、模型再调读工具（重发一次、客户端只见回复）、被拒回退、`/v1/models`、Gemini 客户端格式。
+- `test/e2e/`：`mock_upstream.py` 同时扮演 OpenAI 兼容、Codex、Claude、Gemini 四种上游；`e2e_test.py` 覆盖不带前缀原样、带前缀剥离 + 正文只在读工具返回里 + 注入工具、非流式和流式还原、混合调用、直接回文字、模型再调读工具（重发一次、客户端只见回复）、被拒回退、`/v1/models`、Gemini 客户端格式、最近请求记录（要管理密钥、各种结论、不记不带前缀的请求、不含正文、菜单页不带数据）。
 
 ## 限制
 

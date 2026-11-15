@@ -14,7 +14,15 @@ import (
 type StreamRestorer interface {
 	Process(chunk []byte) [][]byte
 	Finish() [][]byte
+	// Replied reports whether the stream carried a reply-tool call that was
+	// turned back into text (for the plugin's recent-request records).
+	Replied() bool
 }
+
+// replied is embedded by the restorers to remember a reply-tool call.
+type replied struct{ seen bool }
+
+func (r *replied) Replied() bool { return r.seen }
 
 // NewStreamRestorer returns a restorer for the format, or a pass-through one.
 func NewStreamRestorer(format string, tool Tools) StreamRestorer {
@@ -33,6 +41,7 @@ type passStream struct{}
 
 func (passStream) Process(c []byte) [][]byte { return [][]byte{c} }
 func (passStream) Finish() [][]byte          { return nil }
+func (passStream) Replied() bool             { return false }
 
 // framer carries the per-stream framing state shared by the restorers.
 type framer struct {
@@ -119,6 +128,7 @@ type chatChoice struct {
 
 type chatStream struct {
 	framer
+	replied
 	tool    Tools
 	choices map[int64]*chatChoice
 	last    string // last chunk JSON, template for synthesized chunks
@@ -188,6 +198,7 @@ func (s *chatStream) frame(f frame) ([]frame, bool) {
 					if n := tc.Get("function.name").String(); s.tool.has(n) {
 						cl.suppressed = true
 						cl.silent = n == s.tool.Read
+						s.seen = s.seen || !cl.silent
 					} else {
 						cl.client = c.next
 						c.next++
@@ -289,6 +300,7 @@ type respCall struct {
 
 type responsesStream struct {
 	framer
+	replied
 	tool     Tools
 	calls    map[int64]*respCall
 	byItem   map[string]*respCall
@@ -351,6 +363,7 @@ func (s *responsesStream) frame(f frame) ([]frame, bool) {
 		if it.Get("type").String() == "function_call" && s.tool.has(it.Get("name").String()) {
 			c := &respCall{outIndex: ev.Get("output_index").Int(), itemID: it.Get("id").String(), callID: it.Get("call_id").String(), silent: it.Get("name").String() == s.tool.Read}
 			s.calls[c.outIndex] = c
+			s.seen = s.seen || !c.silent
 			if c.itemID != "" {
 				s.byItem[c.itemID] = c
 			}
@@ -473,6 +486,7 @@ type claudeBlock struct {
 
 type claudeStream struct {
 	framer
+	replied
 	tool   Tools
 	blocks map[int64]*claudeBlock
 	other  bool
@@ -502,6 +516,7 @@ func (s *claudeStream) frame(f frame) ([]frame, bool) {
 		if cb.Get("type").String() == "tool_use" {
 			if n := cb.Get("name").String(); s.tool.has(n) {
 				s.blocks[ev.Get("index").Int()] = &claudeBlock{silent: n == s.tool.Read}
+				s.seen = s.seen || n != s.tool.Read
 				return nil, true
 			}
 			s.other = true
