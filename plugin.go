@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,7 +16,7 @@ import (
 )
 
 // pluginVersion is overridden at release build time: -ldflags "-X main.pluginVersion=<ver>".
-var pluginVersion = "0.1.0"
+var pluginVersion = "0.2.0"
 
 const (
 	pluginName     = "filemode"
@@ -32,8 +31,9 @@ var executorFormats = []string{filemode.FormatResponses, filemode.FormatChat, fi
 type pluginConfig struct {
 	Prefix         string   `yaml:"prefix"`
 	ToolName       string   `yaml:"tool_name"`
+	ReadToolName   string   `yaml:"read_tool_name"`
 	Fallback       *bool    `yaml:"fallback"`
-	UpstreamFixups *bool    `yaml:"upstream_fixups"`
+	MaxReads       *int     `yaml:"max_reads"`
 	ListModels     string   `yaml:"list_models"`
 	Models         []string `yaml:"models"`
 	DebugLog       bool     `yaml:"debug_log"`
@@ -42,15 +42,16 @@ type pluginConfig struct {
 type config struct {
 	prefix     string
 	toolName   string
+	readTool   string
 	fallback   bool
-	fixups     bool
+	maxReads   int // times a request is sent again when the model calls the read tool itself
 	listModels string // auto | config | off
 	models     []string
 	debug      bool
 }
 
 func defaultConfig() config {
-	return config{prefix: "file-", toolName: filemode.DefaultToolName, fallback: true, fixups: true, listModels: "auto"}
+	return config{prefix: "file-", toolName: filemode.DefaultToolName, readTool: filemode.DefaultReadToolName, fallback: true, maxReads: 2, listModels: "auto"}
 }
 
 var current atomic.Pointer[config]
@@ -80,11 +81,23 @@ func parseConfig(raw []byte) (config, error) {
 		}
 		cfg.toolName = t
 	}
+	if t := strings.TrimSpace(pc.ReadToolName); t != "" {
+		if !filemode.ValidToolName(t) {
+			return cfg, fmt.Errorf("filemode: invalid read_tool_name %q (letters, digits, _ and -, max 64)", t)
+		}
+		cfg.readTool = t
+	}
+	if cfg.readTool == cfg.toolName {
+		return cfg, fmt.Errorf("filemode: tool_name and read_tool_name must differ")
+	}
 	if pc.Fallback != nil {
 		cfg.fallback = *pc.Fallback
 	}
-	if pc.UpstreamFixups != nil {
-		cfg.fixups = *pc.UpstreamFixups
+	if pc.MaxReads != nil {
+		if *pc.MaxReads < 0 || *pc.MaxReads > 5 {
+			return cfg, fmt.Errorf("filemode: max_reads must be 0..5, got %d", *pc.MaxReads)
+		}
+		cfg.maxReads = *pc.MaxReads
 	}
 	switch m := strings.ToLower(strings.TrimSpace(pc.ListModels)); m {
 	case "":
@@ -102,12 +115,14 @@ func parseConfig(raw []byte) (config, error) {
 	return cfg, nil
 }
 
-func (c config) options(inline bool) filemode.Options {
+func (c config) options() filemode.Options {
 	o := filemode.DefaultOptions()
 	o.ToolName = c.toolName
-	o.InlineText = inline
+	o.ReadTool = c.readTool
 	return o
 }
+
+func (c config) tools() filemode.Tools { return filemode.Tools{Reply: c.toolName, Read: c.readTool} }
 
 type lifecycleRequest struct {
 	ConfigYAML []byte `json:"config_yaml"`
@@ -126,7 +141,6 @@ type capabilities struct {
 	ExecutorModelScope    string   `json:"executor_model_scope"`
 	ExecutorInputFormats  []string `json:"executor_input_formats"`
 	ExecutorOutputFormats []string `json:"executor_output_formats"`
-	RequestNormalizer     bool     `json:"request_normalizer"`
 }
 
 func handleMethod(method string, req []byte) []byte {
@@ -158,8 +172,6 @@ func handleMethod(method string, req []byte) []byte {
 		return executeStream(req)
 	case pluginabi.MethodExecutorCountTokens:
 		return countTokens(req)
-	case pluginabi.MethodRequestNormalize:
-		return normalizeRequest(req)
 	}
 	return errorEnvelope("unknown_method", "unknown method: "+method, 0)
 }
@@ -175,8 +187,9 @@ func buildRegistration(cfg config) registration {
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "prefix", Type: pluginapi.ConfigFieldTypeString, Default: "file-", Description: "Model-name prefix that turns file mode on; file-gpt-5.5 runs as gpt-5.5. Requests without it are untouched."},
 				{Name: "tool_name", Type: pluginapi.ConfigFieldTypeString, Default: filemode.DefaultToolName, Description: "Name of the injected reply tool (argument: content)."},
+				{Name: "read_tool_name", Type: pluginapi.ConfigFieldTypeString, Default: filemode.DefaultReadToolName, Description: "Name of the read tool. The request carries one call of it, already answered with the message text; the plugin answers any further call itself."},
+				{Name: "max_reads", Type: pluginapi.ConfigFieldTypeInteger, Default: 2, Description: "How many times a request is sent again when the model calls the read tool itself (0 = never; the call is then dropped)."},
 				{Name: "fallback", Type: pluginapi.ConfigFieldTypeBoolean, Default: true, Description: "When the upstream rejects the rewritten request (HTTP 400/413/415/422), resend the original request once."},
-				{Name: "upstream_fixups", Type: pluginapi.ConfigFieldTypeBoolean, Default: true, Description: "Repair attachments after CPA's translation (Claude text documents, Gemini text/plain). Adds one cheap plugin call per translated request."},
 				{Name: "list_models", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"auto", "config", "off"}, Default: "auto", Description: "Prefixed aliases in /v1/models: auto = every model CPA knows plus models, config = only models, off = none. Refreshed when the config reloads."},
 				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Default: []string{}, Description: "Base model names to list with the prefix in /v1/models."},
 				{Name: "debug_log", Type: pluginapi.ConfigFieldTypeBoolean, Default: false, Description: "Log one line per file-mode request (format, model, files, fallback). Never logs request or response bodies."},
@@ -189,7 +202,6 @@ func buildRegistration(cfg config) registration {
 			ExecutorModelScope:    string(pluginapi.ExecutorModelScopeStatic),
 			ExecutorInputFormats:  executorFormats,
 			ExecutorOutputFormats: executorFormats,
-			RequestNormalizer:     cfg.fixups,
 		},
 	}
 }
@@ -276,7 +288,7 @@ func registerModels() []byte {
 	for _, id := range ids {
 		models = append(models, pluginapi.ModelInfo{
 			ID: cfg.prefix + id, Object: "model", Created: now, OwnedBy: modelsProvider,
-			DisplayName: cfg.prefix + id, Description: "File mode: " + id + " with the new user turn sent as .md attachments",
+			DisplayName: cfg.prefix + id, Description: "File mode: " + id + " reading the new user turn through a tool",
 			UserDefined: true,
 		})
 	}
@@ -295,53 +307,6 @@ func authModels() ([]pluginapi.HostAuthModels, error) {
 	return resp.Credentials, nil
 }
 
-// ---------- upstream knowledge ----------
-
-type providerCache struct {
-	mu      sync.Mutex
-	at      time.Time
-	byModel map[string]map[string]bool
-}
-
-var providers providerCache
-
-// providersFor returns the provider keys whose credentials list the model.
-func providersFor(model string) map[string]bool {
-	base := model
-	if i := strings.Index(base, "("); i > 0 && strings.HasSuffix(base, ")") {
-		base = base[:i]
-	}
-	providers.mu.Lock()
-	defer providers.mu.Unlock()
-	if providers.byModel == nil || time.Since(providers.at) > 30*time.Second {
-		creds, err := authModels()
-		if err != nil {
-			return nil
-		}
-		m := map[string]map[string]bool{}
-		for _, c := range creds {
-			for _, id := range c.Models {
-				if m[id] == nil {
-					m[id] = map[string]bool{}
-				}
-				m[id][strings.ToLower(c.Provider)] = true
-			}
-		}
-		providers.byModel, providers.at = m, time.Now()
-	}
-	return providers.byModel[base]
-}
-
-// inlineText decides whether the message text must stay inline because a
-// built-in translator on the way would drop the file part. Only the Claude
-// client format into a Codex upstream does that (Codex keeps PDF documents only).
-func inlineText(format, model string) bool {
-	if format != filemode.FormatClaude {
-		return false
-	}
-	return providersFor(model)["codex"]
-}
-
 // ---------- executor ----------
 
 type rpcExecutorRequest struct {
@@ -354,10 +319,6 @@ type hostModelRequest struct {
 	pluginapi.HostModelExecutionRequest
 	HostCallbackID string `json:"host_callback_id,omitempty"`
 }
-
-// active counts rewritten requests in flight; the upstream normalizer returns
-// at once while it is zero.
-var active atomic.Int64
 
 type prepared struct {
 	cfg      config
@@ -385,12 +346,12 @@ func prepare(raw []byte) (*prepared, []byte) {
 	}
 	p := &prepared{cfg: cfg, format: format, model: model, req: req}
 	p.original = filemode.SetModel(req.Payload, model)
-	p.rewrite = filemode.Rewrite(format, p.original, cfg.options(inlineText(format, model)))
+	p.rewrite = filemode.Rewrite(format, p.original, cfg.options())
 	p.send = p.original
 	if p.rewrite.Rewritten {
 		p.send = p.rewrite.Body
 	}
-	logf(cfg, "info", "request", map[string]any{"format": format, "model": model, "stream": req.Stream, "rewritten": p.rewrite.Rewritten, "files": p.rewrite.Files, "skip_reason": p.rewrite.Reason})
+	logf(cfg, "info", "request", map[string]any{"format": format, "model": model, "stream": req.Stream, "rewritten": p.rewrite.Rewritten, "files": len(p.rewrite.Files), "skip_reason": p.rewrite.Reason})
 	return p, nil
 }
 
@@ -413,7 +374,8 @@ func (p *prepared) hostRequest(body []byte, stream bool) hostModelRequest {
 }
 
 // rejected reports whether an upstream error looks like a refusal of the
-// request shape (the attachments), which is worth one retry without them.
+// request shape (the added tool call, the tools), which is worth one retry
+// without them.
 func rejected(err error) bool {
 	he, ok := err.(*hostError)
 	if !ok {
@@ -454,17 +416,28 @@ func execute(raw []byte) []byte {
 		return errEnv
 	}
 	rewritten := p.rewrite.Rewritten
-	if rewritten {
-		active.Add(1)
-	}
-	resp, err := hostExecute(p.hostRequest(p.send, false))
-	if rewritten {
-		active.Add(-1)
-	}
+	send := p.send
+	resp, err := hostExecute(p.hostRequest(send, false))
 	if err != nil && rewritten && p.cfg.fallback && rejected(err) {
 		logf(p.cfg, "warn", "upstream rejected the file-mode request, resending the original once", map[string]any{"format": p.format, "model": p.model, "error": truncate(err.Error(), 300)})
 		rewritten = false
 		resp, err = hostExecute(p.hostRequest(p.original, false))
+	}
+	// the model called the read tool itself: answer it and ask again
+	for n := 0; err == nil && rewritten && n < p.cfg.maxReads; n++ {
+		calls := filemode.ReadCalls(p.format, resp.Body, p.cfg.readTool)
+		if len(calls) == 0 {
+			break
+		}
+		for k, c := range calls {
+			id := c.ID
+			if id == "" {
+				id = filemode.ReadCallID(2 + n*10 + k)
+			}
+			send = filemode.AppendReadCall(p.format, send, p.cfg.options(), id, c.Args, p.rewrite.Files)
+		}
+		logf(p.cfg, "info", "model called the read tool, answered and sent again", map[string]any{"format": p.format, "model": p.model, "calls": len(calls)})
+		resp, err = hostExecute(p.hostRequest(send, false))
 	}
 	if err != nil {
 		return errorFrom(err)
@@ -472,8 +445,8 @@ func execute(raw []byte) []byte {
 	body := resp.Body
 	if rewritten {
 		var restored bool
-		body, restored = filemode.Restore(p.format, body, p.cfg.toolName)
-		logf(p.cfg, "info", "response", map[string]any{"format": p.format, "model": p.model, "restored": restored, "tool_left": strings.Contains(string(body), p.cfg.toolName)})
+		body, restored = filemode.Restore(p.format, body, p.cfg.tools())
+		logf(p.cfg, "info", "response", map[string]any{"format": p.format, "model": p.model, "restored": restored})
 	}
 	return okEnvelope(pluginapi.ExecutorResponse{Payload: body, Headers: cleanHeaders(resp.Headers)})
 }
@@ -537,13 +510,7 @@ func executeStream(raw []byte) []byte {
 		return errorEnvelope("executor_error", "stream_id is required", 0)
 	}
 	rewritten := p.rewrite.Rewritten
-	if rewritten {
-		active.Add(1)
-	}
 	resp, err := hostStream(p.hostRequest(p.send, true))
-	if rewritten {
-		active.Add(-1)
-	}
 	if err != nil && rewritten && p.cfg.fallback && rejected(err) {
 		logf(p.cfg, "warn", "upstream rejected the file-mode request, resending the original once", map[string]any{"format": p.format, "model": p.model, "error": truncate(err.Error(), 300)})
 		rewritten = false
@@ -552,11 +519,7 @@ func executeStream(raw []byte) []byte {
 	if err != nil {
 		return errorFrom(err)
 	}
-	restorer := filemode.NewStreamRestorer("", "")
-	if rewritten {
-		restorer = filemode.NewStreamRestorer(p.format, p.cfg.toolName)
-	}
-	go pump(p.req.StreamID, resp.StreamID, restorer)
+	go pump(p, rewritten, resp.StreamID)
 	headers := cleanHeaders(resp.Headers)
 	if headers.Get("Content-Type") == "" {
 		headers.Set("Content-Type", "text/event-stream")
@@ -564,8 +527,22 @@ func executeStream(raw []byte) []byte {
 	return okEnvelope(map[string]any{"headers": headers})
 }
 
-// pump copies the host model stream into the plugin stream through the restorer.
-func pump(out, in string, r filemode.StreamRestorer) {
+func readChunk(in string) (pluginapi.HostModelStreamReadResponse, error) {
+	var chunk pluginapi.HostModelStreamReadResponse
+	raw, err := callHost(pluginabi.MethodHostModelStreamRead, pluginapi.HostModelStreamReadRequest{StreamID: in})
+	if err != nil {
+		return chunk, err
+	}
+	err = json.Unmarshal(raw, &chunk)
+	return chunk, err
+}
+
+// pump copies the host model stream into the plugin stream through the
+// restorer. While the gate is undecided the chunks are held back; a stream
+// that opens with a read call is dropped and the request sent again with the
+// call answered (at most maxReads times).
+func pump(p *prepared, rewritten bool, in string) {
+	out := p.req.StreamID
 	errMsg := ""
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -574,6 +551,10 @@ func pump(out, in string, r filemode.StreamRestorer) {
 		closeHostStream(in)
 		_, _ = callHost(pluginabi.MethodHostStreamClose, streamClose{StreamID: out, Error: errMsg})
 	}()
+	restorer := filemode.NewStreamRestorer("", filemode.Tools{})
+	if rewritten {
+		restorer = filemode.NewStreamRestorer(p.format, p.cfg.tools())
+	}
 	emit := func(chunks [][]byte) bool {
 		for _, c := range chunks {
 			if len(c) == 0 {
@@ -585,19 +566,55 @@ func pump(out, in string, r filemode.StreamRestorer) {
 		}
 		return true
 	}
+	send := p.send
+	reads := 0
+	var gate *filemode.Gate
+	if rewritten && p.cfg.maxReads > 0 {
+		gate = filemode.NewGate(p.format, p.cfg.readTool)
+	}
+	var held [][]byte
+	release := func() bool {
+		gate = nil
+		for _, c := range held {
+			if !emit(restorer.Process(c)) {
+				return false
+			}
+		}
+		held = nil
+		return true
+	}
 	for {
-		raw, err := callHost(pluginabi.MethodHostModelStreamRead, pluginapi.HostModelStreamReadRequest{StreamID: in})
+		chunk, err := readChunk(in)
 		if err != nil {
 			errMsg = err.Error()
 			return
 		}
-		var chunk pluginapi.HostModelStreamReadResponse
-		if err := json.Unmarshal(raw, &chunk); err != nil {
-			errMsg = err.Error()
-			return
-		}
 		if len(chunk.Payload) > 0 {
-			if !emit(r.Process(chunk.Payload)) {
+			if gate != nil {
+				held = append(held, chunk.Payload)
+				decided, reread := gate.Feed(chunk.Payload)
+				if decided && reread {
+					closeHostStream(in)
+					reads++
+					send = filemode.AppendReadCall(p.format, send, p.cfg.options(), filemode.ReadCallID(1+reads), "{}", p.rewrite.Files)
+					logf(p.cfg, "info", "model called the read tool, answered and sent again", map[string]any{"format": p.format, "model": p.model, "stream": true})
+					resp, err := hostStream(p.hostRequest(send, true))
+					if err != nil {
+						in = ""
+						errMsg = err.Error()
+						return
+					}
+					in, held = resp.StreamID, nil
+					gate = filemode.NewGate(p.format, p.cfg.readTool)
+					if reads >= p.cfg.maxReads {
+						gate = nil
+					}
+					continue
+				}
+				if decided && !release() {
+					return
+				}
+			} else if !emit(restorer.Process(chunk.Payload)) {
 				return
 			}
 		}
@@ -606,7 +623,10 @@ func pump(out, in string, r filemode.StreamRestorer) {
 			return
 		}
 		if chunk.Done {
-			emit(r.Finish())
+			if !release() {
+				return
+			}
+			emit(restorer.Finish())
 			return
 		}
 	}
@@ -622,28 +642,6 @@ func countTokens(raw []byte) []byte {
 	}
 	n := len(p.original) / 4
 	return okEnvelope(pluginapi.ExecutorResponse{Payload: []byte(fmt.Sprintf(`{"input_tokens":%d}`, n)), Headers: http.Header{"Content-Type": []string{"application/json"}}})
-}
-
-// ---------- upstream normalizer ----------
-
-func normalizeRequest(raw []byte) []byte {
-	if active.Load() == 0 {
-		return okEnvelope(pluginapi.PayloadResponse{})
-	}
-	var req pluginapi.RequestTransformRequest
-	if err := json.Unmarshal(raw, &req); err != nil {
-		return okEnvelope(pluginapi.PayloadResponse{})
-	}
-	cfg := loadConfig()
-	if !cfg.fixups || !filemode.IsOurRequest(req.Body, cfg.toolName, "") {
-		return okEnvelope(pluginapi.PayloadResponse{})
-	}
-	out, changed := filemode.FixUpstream(req.ToFormat, req.Body, "")
-	if !changed {
-		return okEnvelope(pluginapi.PayloadResponse{})
-	}
-	logf(cfg, "info", "upstream payload fixed", map[string]any{"from": req.FromFormat, "to": req.ToFormat, "model": req.Model})
-	return okEnvelope(pluginapi.PayloadResponse{Body: out})
 }
 
 func truncate(s string, n int) string {

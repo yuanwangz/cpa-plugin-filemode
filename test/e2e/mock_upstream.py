@@ -8,10 +8,11 @@ Speaks four upstream protocols on one port:
   POST .../models/<m>:generateContent       Gemini (and :streamGenerateContent)
 
 Behaviour is chosen by the model name suffix:
-  *-reply   call submit_reply with "ECHO:" + the attached file text (or the inline text)
+  *-reply   call submit_reply with "ECHO:" + the text the read_message results carry
   *-mixed   call another tool (list_dir) and submit_reply in the same step
+  *-reread  call read_message itself while the request holds only one read result, then reply
   *-text    answer with plain text
-  *-reject  HTTP 400 when the request carries any file/document part, else plain text
+  *-reject  HTTP 400 when the request carries a read_message result, else plain text
 
 Every request is appended to $MOCK_LOG as one JSON line {path, body}.
 """
@@ -44,24 +45,51 @@ def walk(x):
             yield from walk(v)
 
 
-def attachments(body):
-    """Return the decoded text of every file-like part in any upstream format."""
+READ = "read_message"
+
+
+def _text(x):
+    """The text of a tool result in any upstream shape (string, parts, {result: ...})."""
+    if isinstance(x, str):
+        try:
+            j = json.loads(x)
+            if isinstance(j, (dict, list, str)):   # (Chat -> Gemini: CPA puts the tool content in as its raw JSON, a quoted string)
+                return _text(j) if not isinstance(j, str) else j
+        except Exception:
+            pass
+        return x
+    if isinstance(x, list):
+        return "".join(_text(v) for v in x)
+    if isinstance(x, dict):
+        for k in ("text", "output", "result", "content"):
+            if k in x:
+                return _text(x[k])
+    return ""
+
+
+def read_results(body):
+    """The text of every result of a read_message call, in any upstream format."""
+    ids = set()
+    for d in walk(body):
+        if d.get("name") == READ or (isinstance(d.get("function"), dict) and d["function"].get("name") == READ):
+            for k in ("id", "call_id"):
+                if d.get(k):
+                    ids.add(d[k])
     out = []
     for d in walk(body):
-        t = d.get("type")
-        if t == "input_file" and d.get("file_data"):
-            out.append(b64(d["file_data"].split(",", 1)[-1]))
-        elif t == "file" and isinstance(d.get("file"), dict) and d["file"].get("file_data"):
-            out.append(b64(d["file"]["file_data"].split(",", 1)[-1]))
-        elif t == "document" and isinstance(d.get("source"), dict):
-            s = d["source"]
-            out.append(s.get("data", "") if s.get("type") == "text" else b64(s.get("data", "")))
-        for k in ("inline_data", "inlineData"):
-            if isinstance(d.get(k), dict):
-                mt = d[k].get("mime_type") or d[k].get("mimeType") or ""
-                if mt.startswith("text/"):
-                    out.append(b64(d[k].get("data", "")))
+        if d.get("role") == "tool" and d.get("tool_call_id") in ids:
+            out.append(_text(d.get("content")))
+        elif d.get("type") == "function_call_output" and d.get("call_id") in ids:
+            out.append(_text(d.get("output")))
+        elif d.get("type") == "tool_result" and d.get("tool_use_id") in ids:
+            out.append(_text(d.get("content")))
+        for k in ("functionResponse", "function_response"):
+            if isinstance(d.get(k), dict) and d[k].get("name") == READ:
+                out.append(_text(d[k].get("response")))
     return out
+
+
+attachments = read_results  # (the name the checks used when the text went as files)
 
 
 def has_tool(body):
@@ -69,14 +97,14 @@ def has_tool(body):
 
 
 def reply_text(body):
-    files = attachments(body)
+    files = read_results(body)
     if files:
-        return "ECHO:" + " | ".join(files)
+        return "ECHO:" + files[-1]
     return "INLINE-ECHO"
 
 
 def scenario(model):
-    for s in ("reply", "mixed", "text", "reject"):
+    for s in ("reply", "mixed", "reread", "text", "reject"):
         if model.endswith("-" + s):
             return s
     return "text"
@@ -138,7 +166,7 @@ class H(BaseHTTPRequestHandler):
 
     def reject_if_files(self, body, model):
         if scenario(model) == "reject" and attachments(body):
-            self.send_json(400, {"error": {"message": "file parts are not supported by this model", "type": "invalid_request_error", "code": "unsupported_file"}})
+            self.send_json(400, {"error": {"message": "tool results are not supported by this model", "type": "invalid_request_error", "code": "unsupported_file"}})
             return True
         return False
 
@@ -146,6 +174,10 @@ class H(BaseHTTPRequestHandler):
         """[(kind, name, payload)]: kind is 'text' or 'call'."""
         sc = scenario(model)
         if sc == "reply" and has_tool(body):
+            return [("call", TOOL, {"content": reply_text(body)})]
+        if sc == "reread" and has_tool(body):
+            if len(read_results(body)) < 2:
+                return [("call", READ, {})]
             return [("call", TOOL, {"content": reply_text(body)})]
         if sc == "mixed" and has_tool(body):
             return [("call", "list_dir", {"path": "."}), ("call", TOOL, {"content": reply_text(body)})]

@@ -6,8 +6,9 @@ CLIProxyAPI（CPA，[router-for-me/CLIProxyAPI](https://github.com/router-for-me
 
 客户端请求的模型名带前缀（默认 `file-`）时生效，例如 `file-gpt-5.5` 实际按 `gpt-5.5` 路由和执行：
 
-- **请求侧**：本轮新消息（最后一条 assistant 之后的 user 消息；工具循环中间步骤沿用同一轮）的文字正文各写成一个 `msg-N.md` 附件，正文位置只留一行占位 `[message text in the attached file msg-N.md]`；图片等非文字部件原样保留；历史消息不动。注入一个插件自己的工具（默认 `submit_reply`，参数 `{content: string}`），并在最后一条新消息后追加一句英文说明：用这个工具提交完整回复，而且它必须是那一步唯一的调用。
-- **响应侧**：模型调用了 `submit_reply` 时，这次调用改写成客户端格式里普通的 assistant 文字，客户端看不到这个工具（Responses 响应里回显的 `tools` 列表也会去掉它）。和别的工具调用混在同一步时，`submit_reply` 转成文字，其它调用照常保留。模型直接回文字时照常放行。非流式和流式都处理。
+- **请求侧**：本轮新消息（最后一条 assistant 之后的 user 消息；工具循环中间步骤沿用同一轮）的文字正文各记作一个文件 `msg-N.md`，正文位置只留一行占位 `[message text in the file msg-N.md]`；图片等非文字部件原样保留；历史消息不动。紧跟这一轮之后，插件补上一步「模型已调用 `read_message`」和它的返回（这一轮全部文件的正文，多个文件用 `<file name="msg-N.md">…</file>` 分隔），上游看到的就像模型已经读过一遍，不多花一次请求。同时注入两个插件自己的工具：`submit_reply`（参数 `{content: string}`）和 `read_message`（可选参数 `{file}`；历史里有这个调用，就必须声明它，否则 Claude 等接口会报错），并在最后一条新消息后追加一句英文说明：用 `submit_reply` 提交完整回复，而且它必须是那一步唯一的调用。补的调用 id 固定（`call_filemode_read_1`），工具循环每一步改写结果一致，前缀缓存不受影响。
+- **模型自己再调 `read_message`**：插件内部答掉，客户端看不到。非流式：回应里只有这个调用（没有文字、没有别的调用）时，把调用和返回接在请求末尾再发一次。流式：插件先压住开头的输出，直到看出模型第一件事是文字/别的调用（照常放行）还是 `read_message`（丢掉这次流，答掉后重发）；推理/思考块不算，最多压 64 个分块。每个请求最多重发 `max_reads` 次（默认 2）；之后，或调用夹在别的输出里时，这个调用直接去掉。
+- **响应侧**：模型调用了 `submit_reply` 时，这次调用改写成客户端格式里普通的 assistant 文字，客户端看不到这两个工具（Responses 响应里回显的 `tools` 列表也会去掉它们）。和别的工具调用混在同一步时，`submit_reply` 转成文字，其它调用照常保留。模型直接回文字时照常放行。非流式和流式都处理。
 - **被拒回退**：上游以 400/413/415/422 拒收改写后的请求时，用原始请求（只去掉前缀）重发一次。流式请求在首字节前判断，所以也能回退。
 
 不带前缀的请求不做任何改动。
@@ -17,35 +18,30 @@ CLIProxyAPI（CPA，[router-for-me/CLIProxyAPI](https://github.com/router-for-me
 | 环节 | 作用 |
 |---|---|
 | `model_router` | 只看 `RequestedModel` 是否以前缀开头（不解码 body），命中就交给本插件的 executor（`TargetKind: self`）。 |
-| `executor`（input/output 格式：`openai-response`、`openai`、`claude`） | 在客户端格式（source format）上改写请求，再通过 `host.model.execute` / `host.model.execute_stream` 用去掉前缀的模型名交回 CPA 原生链路（选渠道、凭证、翻译、计费都由 CPA 完成）。拿回同一格式的响应后还原 `submit_reply`。流式时插件自己读宿主流、压住 `submit_reply` 的增量，结束时作为文字发出。 |
-| `request_normalizer` | CPA 内置翻译器把请求翻成上游格式之后运行，按 ToFormat 修补附件（见下表）。没有文件模式请求在途时直接返回，不解析 body。 |
+| `executor`（input/output 格式：`openai-response`、`openai`、`claude`） | 在客户端格式（source format）上改写请求，再通过 `host.model.execute` / `host.model.execute_stream` 用去掉前缀的模型名交回 CPA 原生链路（选渠道、凭证、翻译、计费都由 CPA 完成）。拿回同一格式的响应后还原 `submit_reply`、答掉 `read_message`。流式时插件自己读宿主流、压住 `submit_reply` 的增量，结束时作为文字发出。 |
 | `model_registrar` | 把带前缀的别名登记进 `/v1/models`。 |
+
+正文走的是工具调用和工具返回，CPA 内置翻译器对每种上游都会转（OpenAI 兼容的 `tool` 消息、Codex 的 `function_call_output`、Claude 的 `tool_result`、Gemini 的 `functionResponse`），所以不再需要翻译后的附件修补（旧版的 `request_normalizer` 和 Claude→Codex 退回内联都去掉了）。
 
 为什么不用 `request_interceptor` / `response_interceptor` / `response_stream_interceptor`：
 
 1. 模型名到渠道的解析发生在拦截器之前，拦截器改不了路由；只有 `model_router` 能接住一个注册表里不存在的 `file-xxx`，而它若返回 `provider` 目标，只能指定一个渠道，丢掉 CPA 的多渠道轮询和别名池。
-2. 拦截器拿不到上游的错误响应，做不了「被拒回退」。
+2. 拦截器拿不到上游的错误响应，做不了「被拒回退」，也没法答掉 `read_message` 再发一次。
 3. 流式拦截器每次只能替换或丢弃一个 chunk，且 `HistoryChunks` 只保留最近 64 个 / 1 MiB；用 executor 自己读宿主流更可控。
-4. `host.model.*` 嵌套执行时，宿主会跳过发起插件自己的拦截器（`host_callback_id` 防递归），所以「按 ToFormat 在 intercept_after 里补附件」在这条链路上不会被调用；改用不受此限制、同样在翻译之后运行的 `request_normalizer`。
 
 ## 各上游支持情况
 
-基于 CPA v8.0.72 内置翻译器（`test/translator-probe/` 有探测代码和原始输出）和 mock 上游的端到端测试：
+基于 CPA v8.0.72 内置翻译器和 mock 上游的端到端测试（`test/e2e/last-run.txt`）：
 
-| 客户端格式 → 上游 | 附件到上游的形态 | 插件修补 | 工具调用还原 | 端到端 |
+| 客户端格式 → 上游 | 正文到上游的形态 | 工具调用还原 | 模型再调 read_message | 端到端 |
 |---|---|---|---|---|
-| Responses / Chat → OpenAI 兼容 | `file` 部件（`data:text/markdown`，带文件名） | 无 | ✓ | ✓ mock |
-| Responses / Chat → Codex | `input_file`（带文件名） | 无 | ✓ | ✓ mock |
-| Responses / Chat → Claude | 翻译器产出 base64 `document`，media_type `text/markdown`（Anthropic 的 base64 只收 PDF） | 改成 `source.type: text`、`text/plain`，按占位补 `title` | ✓ | ✓ mock |
-| Responses / Chat → Gemini | `inline_data` / `inlineData`，`text/markdown` | 改成 `text/plain` | ✓ | ✓ mock |
-| Responses / Chat → Antigravity | `request.contents[].parts[].inlineData`，`text/markdown` | 改成 `text/plain` | 同 Gemini 链路 | ✗ 未测（需 OAuth） |
-| Claude → Claude | base64 `document` `text/plain` + `title` | 改成 text source | ✓ | ✓ mock |
-| Claude → OpenAI 兼容 | `file` 部件 `text/plain`，翻译器丢了文件名 | 按占位补 `filename` | ✓ | ✓ mock |
-| Claude → Gemini / Antigravity | `inline_data` `text/plain` | 无 | ✓ | Gemini ✓ mock，Antigravity 未测 |
-| Claude → Codex | **翻译器只保留 PDF，文本文档会被丢掉** | 无法补：插件改为把正文留在原位（仍注入 `submit_reply`） | ✓ | ✓ mock |
-| Gemini 客户端（`/v1beta/models/file-xxx:generateContent`） | CPA 先把请求翻成 Responses 交给插件，之后同 Responses 行 | 同上 | ✓ | ✓ mock（→ OpenAI 兼容） |
-
-「Claude → Codex 退回纯文字」由插件通过 `host.auth.models` 查这个模型由哪些渠道提供（缓存 30 秒），只要其中有 codex 就退回。
+| Responses / Chat → OpenAI 兼容 | `tool` 消息 | ✓ | ✓ | ✓ mock |
+| Responses / Chat → Codex | `function_call_output` | ✓ | ✓ | ✓ mock |
+| Responses / Chat → Claude | `tool_result` | ✓ | ✓ | ✓ mock |
+| Responses / Chat → Gemini | `functionResponse`（Chat 来的：CPA 把工具内容按原始 JSON 放进 `result`，即带引号的字符串） | ✓ | ✓ | ✓ mock |
+| Claude → Claude / OpenAI 兼容 / Codex / Gemini | 同上 | ✓ | ✓ | ✓ mock |
+| Antigravity | 同 Gemini 链路 | 同 Gemini | 同 Gemini | ✗ 未测（需 OAuth） |
+| Gemini 客户端（`/v1beta/models/file-xxx:generateContent`） | CPA 先把请求翻成 Responses 交给插件，之后同 Responses 行 | ✓ | ✓ | ✓ mock（→ OpenAI 兼容） |
 
 ## 安装
 
@@ -73,17 +69,20 @@ plugins:
       enabled: true
       priority: 10
       prefix: "file-"            # 触发前缀
-      tool_name: "submit_reply"  # 注入的工具名（字母、数字、_、-，最长 64）
+      tool_name: "submit_reply"  # 回复工具名（字母、数字、_、-，最长 64）
+      read_tool_name: "read_message"  # 读消息工具名（同上，不能和 tool_name 相同）
+      max_reads: 2               # 模型自己再调读工具时，插件答掉并重发的次数上限（0..5；0 = 不重发，调用直接去掉）
       fallback: true             # 上游拒收（400/413/415/422）时用原始请求重发一次
-      upstream_fixups: true      # 翻译后修补附件（request_normalizer）；关掉则不声明该能力
       list_models: "auto"        # /v1/models 别名：auto = CPA 已知的全部模型 + models；config = 只列 models；off = 不列
       models: []                 # 额外要列出的基础模型名
-      debug_log: false           # 每个文件模式请求记一行（格式、模型、附件数、是否回退），从不记正文
+      debug_log: false           # 每个文件模式请求记一行（格式、模型、文件数、是否回退/重读），从不记正文
 ```
+
+旧配置里的 `upstream_fixups` 不再起作用，留着也不报错。
 
 动态库文件名决定插件 ID：放在 `plugins/<GOOS>/<GOARCH>/filemode.so`（或 `plugins/filemode.so`），配置键就是 `filemode`。
 
-插件不需要临时文件，所以没有 `keep_files` 选项。
+「文件」只是给模型看的名字，插件不落盘，所以没有 `keep_files` 选项。
 
 ## 构建
 
@@ -100,17 +99,17 @@ CPA 本体也必须是 CGO 构建（管理接口响应头 `X-CPA-SUPPORT-PLUGIN:
 
 ## 测试
 
-- `internal/filemode/*_test.go`：请求改写（三种格式、轮次判定、工具循环、`tool_choice: none`、重名工具、cache_control、内联模式）、非流式还原、三种流式还原（含混合调用、工具序号重排、Codex 的 event/data 分块）、上游修补。
-- `test/e2e/`：`mock_upstream.py` 同时扮演 OpenAI 兼容、Codex、Claude、Gemini 四种上游；`e2e_test.py` 覆盖不带前缀原样、带前缀剥离 + 进文件 + 注入工具、非流式和流式还原、混合调用、直接回文字、被拒回退、`/v1/models`、Gemini 客户端格式。
+- `internal/filemode/*_test.go`：请求改写（三种格式、轮次判定、工具循环里补的调用位置、`tool_choice: none`、重名工具、cache_control 挪到工具返回上）、读工具的返回和追加、非流式里「只调了读工具」的判定、流式闸门、非流式和三种流式还原（含混合调用、读调用去掉、工具序号重排、Codex 的 event/data 分块）。
+- `test/e2e/`：`mock_upstream.py` 同时扮演 OpenAI 兼容、Codex、Claude、Gemini 四种上游；`e2e_test.py` 覆盖不带前缀原样、带前缀剥离 + 正文只在读工具返回里 + 注入工具、非流式和流式还原、混合调用、直接回文字、模型再调读工具（重发一次、客户端只见回复）、被拒回退、`/v1/models`、Gemini 客户端格式。
 
 ## 限制
 
-- **只认文字正文**：图片、音频和客户端自带的文件原样保留；一条消息里多个文字部件合成一个文件（用换行连接）。
-- **历史形态会变**：一轮结束后，这轮的消息在下一轮作为历史以原文出现（附件只给新一轮），按设计如此；这一步前缀缓存会失效一次。
-- **流式回复整段发出**：`submit_reply` 的内容在它的调用结束时一次性作为文字发出，不是逐字流出。
+- **只认文字正文**：图片、音频和客户端自带的文件原样留在消息里；一条消息里多个文字部件合成一个文件（用换行连接）。
+- **历史形态会变**：一轮结束后，这轮的消息在下一轮作为历史以原文出现（补的读调用只给新一轮），按设计如此；这一步前缀缓存会失效一次。
+- **带思考签名的上游**：Claude 开着 extended thinking 时，当前轮里的 assistant 工具调用要求带 thinking 块，插件补的调用没有，接口可能 400，此时走「被拒回退」按原样发（这一轮不是文件模式）。Gemini 的 thought signature 由 CPA 翻译器自己补。
+- **流式回复整段发出**：`submit_reply` 的内容在它的调用结束时一次性作为文字发出，不是逐字流出。流式开头会压住最多 64 个分块等判定（见上），直接回文字的回复在第一段文字出现时放行。
 - **回退时机**：只在上游给出 400/413/415/422 且尚未开始输出时重发；流开始后的错误不重发。
 - **token 计数**：`count_tokens` 对带前缀的模型返回按原始请求字节数 / 4 的估算值（宿主没有在另一个模型上计数的回调）。
 - **`/v1/models` 刷新时机**：别名在插件加载和配置重载时登记；之后新增的模型要等下一次配置重载才会出现。路由不依赖这个列表，任何 `file-` 前缀都能用。
-- **开销**：声明了 `model_router` 后，CPA 会在每个请求上调一次插件的 `model.route`，宿主会把请求体序列化给插件；插件只解析模型名，不解码 body。`request_normalizer` 同理，插件在没有文件模式请求在途时立即返回；如不需要修补可以设 `upstream_fixups: false`。
-- **未在真实上游验证**：OpenAI 官方 API 对 `text/markdown` 的 `input_file` / `file` 是否接受、Antigravity（含其背后的 Claude 模型）对 `inlineData text/plain` 的处理，都只按翻译器输出推断；被拒时靠回退兜底。
+- **开销**：声明了 `model_router` 后，CPA 会在每个请求上调一次插件的 `model.route`，宿主会把请求体序列化给插件；插件只解析模型名，不解码 body。
 - 未测试 Responses 的 WebSocket 通道、`Home` 模式（该模式下 CPA 不允许插件 executor 路由）。

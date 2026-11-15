@@ -4,15 +4,15 @@
     {
       "id": "filemode",
       "name": "File Mode",
-      "description": "For models requested with a configurable prefix (default file-), sends the new user turn as .md file attachments and turns the model's submit_reply tool call back into a plain text reply. Works across OpenAI-compatible, Codex, Claude and Gemini upstreams.",
+      "description": "For models requested with a configurable prefix (default file-), replaces the text of the new user turn with file names answered by a read_message call the model has already made, and turns the model's submit_reply tool call back into a plain text reply. Works across OpenAI-compatible, Codex, Claude and Gemini upstreams.",
       "author": "yuanwangz",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "repository": "https://github.com/yuanwangz/cpa-plugin-filemode",
       "homepage": "https://github.com/yuanwangz/cpa-plugin-filemode",
       "tags": ["Interceptor"],
       "locales": {
         "zh-CN": {
-          "description": "模型名带指定前缀（默认 file-）时，把本轮新用户消息的正文作为 .md 附件发给模型，并把模型的 submit_reply 工具调用还原成普通文字回复。上游为 OpenAI 兼容、Codex、Claude、Gemini 均可用。"
+          "description": "模型名带指定前缀（默认 file-）时，把本轮新用户消息的正文换成文件名，并补上一次「模型已调用 read_message」及其返回（正文在返回里），并把模型的 submit_reply 工具调用还原成普通文字回复。上游为 OpenAI 兼容、Codex、Claude、Gemini 均可用。"
         }
       }
     }

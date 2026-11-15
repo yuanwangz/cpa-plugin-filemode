@@ -22,6 +22,7 @@ api-keys:
       models:
         - {name: "oa-reply", alias: "oa-reply"}
         - {name: "oa-mixed", alias: "oa-mixed"}
+        - {name: "oa-reread", alias: "oa-reread"}
         - {name: "oa-text", alias: "oa-text"}
         - {name: "oa-reject", alias: "oa-reject"}
   claude:
@@ -32,6 +33,7 @@ api-keys:
       models:
         - {name: "cl-reply", alias: "cl-reply"}
         - {name: "cl-mixed", alias: "cl-mixed"}
+        - {name: "cl-reread", alias: "cl-reread"}
         - {name: "cl-text", alias: "cl-text"}
         - {name: "cl-reject", alias: "cl-reject"}
   codex:
@@ -42,6 +44,7 @@ api-keys:
       models:
         - {name: "cx-reply", alias: "cx-reply"}
         - {name: "cx-mixed", alias: "cx-mixed"}
+        - {name: "cx-reread", alias: "cx-reread"}
         - {name: "cx-text", alias: "cx-text"}
         - {name: "cx-reject", alias: "cx-reject"}
   gemini:
@@ -52,6 +55,7 @@ api-keys:
       models:
         - {name: "gm-reply", alias: "gm-reply"}
         - {name: "gm-mixed", alias: "gm-mixed"}
+        - {name: "gm-reread", alias: "gm-reread"}
         - {name: "gm-text", alias: "gm-text"}
         - {name: "gm-reject", alias: "gm-reject"}
 plugins:
@@ -64,7 +68,8 @@ plugins:
       prefix: "file-"
       tool_name: "submit_reply"
       fallback: true
-      upstream_fixups: true
+      read_tool_name: "read_message"
+      max_reads: 2
       list_models: "auto"
       models: ["oa-text"]
       debug_log: true

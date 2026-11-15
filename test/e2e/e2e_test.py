@@ -185,27 +185,10 @@ def test_passthrough():
         check("no prefix: %s -> %s plain answer" % (fmt, model), text == "plain text answer", raw[:300])
 
 
-EXPECT_SHAPE = {  # upstream format -> description of the attachment shape we expect
-    "oa": "file part (chat)", "cl": "document text source", "cx": "input_file", "gm": "inline_data text/plain",
-}
-
-
-def attachment_shape_ok(up, rec):
-    b = rec["body"]
-    s = json.dumps(b)
-    if up == "oa":
-        return '"type": "file"' in s and "msg-1.md" in s
-    if up == "cl":
-        docs = [d for d in walk(b) if isinstance(d, dict) and d.get("type") == "document"]
-        return bool(docs) and all(d["source"].get("type") == "text" and d["source"].get("media_type") == "text/plain" for d in docs)
-    if up == "cx":
-        return '"input_file"' in s and "msg-1.md" in s
-    if up == "gm":
-        parts = [d for d in walk(b) if isinstance(d, dict) and ("inline_data" in d or "inlineData" in d)]
-        mts = [(p.get("inline_data") or p.get("inlineData")) for p in parts]
-        mts = [m.get("mime_type") or m.get("mimeType") for m in mts]
-        return "text/plain" in mts and "text/markdown" not in mts
-    return False
+def text_moved_ok(rec):
+    """The message text sits only in the read result; the user message holds the file name."""
+    s = json.dumps(rec["body"], ensure_ascii=False)
+    return "msg-1.md" in s and s.count("**markdown**") == 1 and attachments(rec["body"]) == [TXT]
 
 
 def walk(x):
@@ -218,7 +201,7 @@ def walk(x):
             yield from walk(v)
 
 
-def test_reply(fmt, up, stream, inline=False):
+def test_reply(fmt, up, stream):
     model = "file-%s-reply" % up
     n = mark()
     path, body = body_for(fmt, model, TXT, stream)
@@ -231,19 +214,14 @@ def test_reply(fmt, up, stream, inline=False):
         return
     rec = ups[0]
     check("[%s] prefix stripped (upstream model %s)" % (tag, upstream_model(rec)), upstream_model(rec) == "%s-reply" % up, upstream_model(rec))
-    check("[%s] submit_reply tool injected" % tag, TOOL in json.dumps(rec["body"]), "")
+    check("[%s] submit_reply and read_message tools injected" % tag, TOOL in json.dumps(rec["body"]) and "read_message" in json.dumps(rec["body"]), "")
     check("[%s] instruction appended" % tag, "by calling the submit_reply tool" in json.dumps(rec["body"]), "")
-    if inline:
-        check("[%s] text kept inline (translator would drop the file)" % tag, not attachments(rec["body"]) and "你好" in upstream_text(rec["body"]), attachments(rec["body"]))
-        want = "INLINE-ECHO"
-    else:
-        att = attachments(rec["body"])
-        check("[%s] new message body travels as attachment (%s)" % (tag, EXPECT_SHAPE[up]), att == [TXT] and attachment_shape_ok(up, rec), (att, json.dumps(rec["body"], ensure_ascii=False)[:1500]))
-        check("[%s] message text not left inline" % tag, "**markdown**" not in upstream_text(rec["body"]).replace(json.dumps(TXT, ensure_ascii=False), ""), "")
-        want = "ECHO:" + TXT
+    check("[%s] message text travels only as the read_message result" % tag, text_moved_ok(rec), (attachments(rec["body"]), json.dumps(rec["body"], ensure_ascii=False)[:1500]))
+    check("[%s] no attachment parts" % tag, not any(isinstance(d, dict) and d.get("type") in ("input_file", "file", "document") for d in walk(rec["body"])), "")
+    want = "ECHO:" + TXT
     text, tools, final = parse(fmt, raw, stream)
     check("[%s] reply restored as plain text" % tag, text == want, (text, raw[:800]))
-    check("[%s] client never sees submit_reply" % tag, TOOL not in raw and TOOL not in tools, raw[:3000])
+    check("[%s] client never sees submit_reply / read_message" % tag, TOOL not in raw and TOOL not in tools and "read_message" not in raw, raw[:3000])
     if final is not None:
         check("[%s] response.completed output carries the text" % tag, final == want, (final, raw[-1500:]))
 
@@ -254,9 +232,22 @@ def test_mixed(fmt, up, stream):
     st, raw = post(path, body, stream)
     tag = "%s->%s %s" % (fmt, up, "stream" if stream else "non-stream")
     text, tools, _ = parse(fmt, raw, stream) if st == 200 else ("", [], None)
-    want = "INLINE-ECHO" if (fmt == "claude" and up == "cx") else "ECHO:" + TXT
+    want = "ECHO:" + TXT
     check("[mixed %s] other tool call kept, submit_reply turned into text" % tag,
           st == 200 and tools == ["list_dir"] and text.endswith(want) and TOOL not in raw, (st, text, tools, raw[:3000]))
+
+
+def test_reread(fmt, up, stream):
+    """The model calls read_message itself: the plugin answers it and asks again; the client sees one reply."""
+    n = mark()
+    path, body = body_for(fmt, "file-%s-reread" % up, TXT, stream)
+    st, raw = post(path, body, stream)
+    ups = upstream_since(n)
+    text, tools, _ = parse(fmt, raw, stream) if st == 200 else ("", [], None)
+    tag = "%s->%s %s" % (fmt, up, "stream" if stream else "non-stream")
+    check("[reread %s] two upstream requests, the second with the call answered" % tag,
+          len(ups) == 2 and len(attachments(ups[0]["body"])) == 1 and attachments(ups[1]["body"]) == [TXT, TXT], [attachments(u["body"]) for u in ups])
+    check("[reread %s] client gets only the reply" % tag, st == 200 and text == "ECHO:" + TXT and not tools and "read_message" not in raw and TOOL not in raw, (st, text, tools, raw[:2000]))
 
 
 def test_text(fmt, up, stream):
@@ -276,7 +267,7 @@ def test_reject(fmt, up, stream):
     tag = "%s->%s %s" % (fmt, up, "stream" if stream else "non-stream")
     with_files = [u for u in ups if attachments(u["body"])]
     plain = [u for u in ups if not attachments(u["body"])]
-    check("[reject %s] first attempt had files, resent once as the original" % tag,
+    check("[reject %s] first attempt had the read result, resent once as the original" % tag,
           len(with_files) >= 1 and len(plain) == 1 and TOOL not in json.dumps(plain[0]["body"]) and has_text(plain[0]["body"], TXT),
           [(u["path"], len(attachments(u["body"]))) for u in ups])
     check("[reject %s] client gets the plain answer" % tag, st == 200 and text == "plain text answer", (st, raw[:300]))
@@ -293,8 +284,9 @@ def test_history_untouched():
     st, raw = post("/v1/responses", body)
     ups = upstream_since(n)
     s = json.dumps(ups[0]["body"], ensure_ascii=False) if ups else ""
-    check("history untouched, two new messages -> msg-1.md / msg-2.md, image kept",
-          st == 200 and "old question" in s and "old answer" in s and attachments(ups[0]["body"]) == ["first new", "second new"]
+    res = attachments(ups[0]["body"]) if ups else []
+    check("history untouched, two new messages -> msg-1.md / msg-2.md in one read result, image kept",
+          st == 200 and "old question" in s and "old answer" in s and len(res) == 1 and "first new" in res[0] and "second new" in res[0]
           and "msg-2.md" in s and "image_url" in s, s[:1500])
 
 
@@ -306,7 +298,7 @@ def test_gemini_client(stream):
     st, raw = post("/v1beta/models/file-oa-reply:" + action, body, stream)
     ups = upstream_since(n)
     tag = "gemini client->oa %s" % ("stream" if stream else "non-stream")
-    check("[%s] file attached upstream, prefix stripped" % tag, st == 200 and ups and attachments(ups[0]["body"]) == [TXT] and upstream_model(ups[0]) == "oa-reply", (st, raw[:300]))
+    check("[%s] text in the read result upstream, prefix stripped" % tag, st == 200 and ups and attachments(ups[0]["body"]) == [TXT] and upstream_model(ups[0]) == "oa-reply", (st, raw[:300]))
     texts, calls = [], []
     for e in (sse_events(raw) if stream else [json.loads(raw)] if st == 200 else []):
         if e == "[DONE]":
@@ -327,7 +319,7 @@ def main():
     for stream in (False, True):
         for fmt in ("responses", "chat", "claude"):
             for up in ("oa", "cl", "cx", "gm"):
-                test_reply(fmt, up, stream, inline=(fmt == "claude" and up == "cx"))
+                test_reply(fmt, up, stream)
     for stream in (False, True):
         test_gemini_client(stream)
         for fmt in ("responses", "chat", "claude"):
@@ -335,6 +327,8 @@ def main():
                 test_mixed(fmt, up, stream)
         for fmt, up in (("responses", "oa"), ("chat", "cl"), ("claude", "gm"), ("responses", "cx")):
             test_text(fmt, up, stream)
+        for fmt, up in (("responses", "oa"), ("chat", "cl"), ("claude", "cx"), ("claude", "gm"), ("chat", "oa")):
+            test_reread(fmt, up, stream)
         for fmt, up in (("responses", "oa"), ("chat", "oa"), ("claude", "cl"), ("responses", "gm"), ("chat", "cx")):
             test_reject(fmt, up, stream)
     passed = sum(1 for _, ok in results if ok)

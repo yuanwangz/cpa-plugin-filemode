@@ -17,7 +17,7 @@ type StreamRestorer interface {
 }
 
 // NewStreamRestorer returns a restorer for the format, or a pass-through one.
-func NewStreamRestorer(format, tool string) StreamRestorer {
+func NewStreamRestorer(format string, tool Tools) StreamRestorer {
 	switch format {
 	case FormatResponses:
 		return &responsesStream{tool: tool, calls: map[int64]*respCall{}, byItem: map[string]*respCall{}}
@@ -104,6 +104,7 @@ func (fr *framer) flushHeld() [][]byte {
 
 type chatCall struct {
 	suppressed bool
+	silent     bool // a read-tool call: dropped, no text
 	client     int64
 	args       strings.Builder
 }
@@ -118,7 +119,7 @@ type chatChoice struct {
 
 type chatStream struct {
 	framer
-	tool    string
+	tool    Tools
 	choices map[int64]*chatChoice
 	last    string // last chunk JSON, template for synthesized chunks
 }
@@ -138,7 +139,7 @@ func (c *chatChoice) pending() (string, bool) {
 	}
 	var texts []string
 	for _, k := range c.order {
-		if cl := c.calls[k]; cl.suppressed {
+		if cl := c.calls[k]; cl.suppressed && !cl.silent {
 			texts = append(texts, ReplyText(cl.args.String()))
 		}
 	}
@@ -184,8 +185,9 @@ func (s *chatStream) frame(f frame) ([]frame, bool) {
 					cl = &chatCall{}
 					c.calls[ti] = cl
 					c.order = append(c.order, ti)
-					if tc.Get("function.name").String() == s.tool {
+					if n := tc.Get("function.name").String(); s.tool.has(n) {
 						cl.suppressed = true
+						cl.silent = n == s.tool.Read
 					} else {
 						cl.client = c.next
 						c.next++
@@ -282,11 +284,12 @@ type respCall struct {
 	args     strings.Builder
 	final    *string
 	done     bool
+	silent   bool // a read-tool call: dropped, no text
 }
 
 type responsesStream struct {
 	framer
-	tool     string
+	tool     Tools
 	calls    map[int64]*respCall
 	byItem   map[string]*respCall
 	seq      int64
@@ -345,8 +348,8 @@ func (s *responsesStream) frame(f frame) ([]frame, bool) {
 	switch typ {
 	case "response.output_item.added":
 		it := ev.Get("item")
-		if it.Get("type").String() == "function_call" && it.Get("name").String() == s.tool {
-			c := &respCall{outIndex: ev.Get("output_index").Int(), itemID: it.Get("id").String(), callID: it.Get("call_id").String()}
+		if it.Get("type").String() == "function_call" && s.tool.has(it.Get("name").String()) {
+			c := &respCall{outIndex: ev.Get("output_index").Int(), itemID: it.Get("id").String(), callID: it.Get("call_id").String(), silent: it.Get("name").String() == s.tool.Read}
 			s.calls[c.outIndex] = c
 			if c.itemID != "" {
 				s.byItem[c.itemID] = c
@@ -367,7 +370,7 @@ func (s *responsesStream) frame(f frame) ([]frame, bool) {
 		}
 	case "response.output_item.done":
 		it := ev.Get("item")
-		if c := s.calls[ev.Get("output_index").Int()]; c != nil && it.Get("type").String() == "function_call" && it.Get("name").String() == s.tool {
+		if c := s.calls[ev.Get("output_index").Int()]; c != nil && it.Get("type").String() == "function_call" && s.tool.has(it.Get("name").String()) {
 			a := it.Get("arguments").String()
 			c.final = &a
 			return s.synth(f, c), true
@@ -419,6 +422,9 @@ func (s *responsesStream) synth(f frame, c *respCall) []frame {
 		args = *c.final
 	}
 	text := ReplyText(args)
+	if c.silent {
+		text = ""
+	}
 	id := msgID(c.callID, c.itemID)
 	oi := c.outIndex
 	part := map[string]any{"type": "output_text", "text": "", "annotations": []any{}, "logprobs": []any{}}
@@ -460,13 +466,14 @@ func (s *responsesStream) Finish() [][]byte {
 // ---------- Claude Messages ----------
 
 type claudeBlock struct {
-	args strings.Builder
-	done bool
+	args   strings.Builder
+	done   bool
+	silent bool // a read-tool call: dropped, no text
 }
 
 type claudeStream struct {
 	framer
-	tool   string
+	tool   Tools
 	blocks map[int64]*claudeBlock
 	other  bool
 }
@@ -493,8 +500,8 @@ func (s *claudeStream) frame(f frame) ([]frame, bool) {
 	case "content_block_start":
 		cb := ev.Get("content_block")
 		if cb.Get("type").String() == "tool_use" {
-			if cb.Get("name").String() == s.tool {
-				s.blocks[ev.Get("index").Int()] = &claudeBlock{}
+			if n := cb.Get("name").String(); s.tool.has(n) {
+				s.blocks[ev.Get("index").Int()] = &claudeBlock{silent: n == s.tool.Read}
 				return nil, true
 			}
 			s.other = true
@@ -527,6 +534,9 @@ func (s *claudeStream) frame(f frame) ([]frame, bool) {
 func (s *claudeStream) synth(f frame, idx int64, b *claudeBlock) []frame {
 	b.done = true
 	text := ReplyText(b.args.String())
+	if b.silent {
+		text = ""
+	}
 	evs := []map[string]any{
 		{"type": "content_block_start", "index": idx, "content_block": map[string]any{"type": "text", "text": ""}},
 		{"type": "content_block_delta", "index": idx, "delta": map[string]any{"type": "text_delta", "text": text}},
