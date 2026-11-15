@@ -16,9 +16,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// pluginVersion is overridden at release build time: -ldflags "-X main.pluginVersion=<ver>".
+var pluginVersion = "0.1.0"
+
 const (
 	pluginName     = "filemode"
-	pluginVersion  = "0.1.0"
 	executorID     = "filemode"
 	modelsProvider = "filemode"
 )

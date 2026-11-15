@@ -47,6 +47,21 @@ CLIProxyAPI（CPA，[router-for-me/CLIProxyAPI](https://github.com/router-for-me
 
 「Claude → Codex 退回纯文字」由插件通过 `host.auth.models` 查这个模型由哪些渠道提供（缓存 30 秒），只要其中有 codex 就退回。
 
+## 安装
+
+**从插件商店装**（推荐）：在 CPA 配置里加上本仓库的插件源，再到管理界面的插件商店安装 File Mode，或调用 `POST /v0/management/plugin-store/filemode/install`：
+
+```yaml
+plugins:
+  enabled: true
+  store-sources:
+    - "https://raw.githubusercontent.com/yuanwangz/cpa-plugin-filemode/main/registry.json"
+```
+
+商店从本仓库最新的 release 下载对应平台的 `filemode_<版本>_<goos>_<goarch>.zip`，并用 `checksums.txt` 校验。release 由打 `v*` tag 触发 CI 自动生成，覆盖 linux（amd64、arm64）、darwin（amd64、arm64）和 windows（amd64）。
+
+**手动装**：从 release 下载对应平台的 zip，把里面的动态库放到 `plugins/<GOOS>/<GOARCH>/`，再按下面的配置启用。
+
 ## 配置
 
 ```yaml
