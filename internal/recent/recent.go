@@ -14,9 +14,10 @@ import (
 
 // Inbound outcomes.
 const (
-	InRewritten = "rewritten" // the new user turn went out as files + read call
-	InSkipped   = "skipped"   // nothing to rewrite (Note says why); sent as is
-	InFallback  = "fallback"  // upstream rejected the rewritten request; original sent instead
+	InRewritten = "rewritten"  // the new user turn went out as files + read call
+	InSkipped   = "skipped"    // nothing to rewrite (Note says why); sent as is
+	InFallback  = "fallback"   // upstream rejected the rewritten request; original sent instead
+	InToolsOnly = "tools_only" // tool_choice none: messages untouched, tools appended to keep the prefix cache
 )
 
 // Reply outcomes.

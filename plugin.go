@@ -17,7 +17,7 @@ import (
 )
 
 // pluginVersion is overridden at release build time: -ldflags "-X main.pluginVersion=<ver>".
-var pluginVersion = "0.3.0"
+var pluginVersion = "0.4.0"
 
 const (
 	pluginName     = "filemode"
@@ -366,12 +366,15 @@ func prepare(raw []byte, record bool) (*prepared, []byte) {
 	p.original = filemode.SetModel(req.Payload, model)
 	p.rewrite = filemode.Rewrite(format, p.original, cfg.options())
 	p.send = p.original
-	if p.rewrite.Rewritten {
+	if p.rewrite.Rewritten || p.rewrite.ToolsOnly {
 		p.send = p.rewrite.Body
 	}
 	if record {
 		in, reply := recent.InRewritten, recent.ReplyPending
-		if !p.rewrite.Rewritten {
+		switch {
+		case p.rewrite.ToolsOnly:
+			in = recent.InToolsOnly
+		case !p.rewrite.Rewritten:
 			in = recent.InSkipped
 		}
 		p.rec = history.Start(recent.Record{
@@ -486,7 +489,7 @@ func execute(raw []byte) []byte {
 	rewritten := p.rewrite.Rewritten
 	send := p.send
 	resp, err := hostExecute(p.hostRequest(send, false))
-	if err != nil && rewritten && p.cfg.fallback && rejected(err) {
+	if err != nil && (rewritten || p.rewrite.ToolsOnly) && p.cfg.fallback && rejected(err) {
 		logf(p.cfg, "warn", "upstream rejected the file-mode request, resending the original once", map[string]any{"id": p.recID(), "format": p.format, "model": p.model, "error": truncate(err.Error(), 300)})
 		p.fellBack(err)
 		rewritten = false
@@ -583,7 +586,7 @@ func executeStream(raw []byte) []byte {
 	}
 	rewritten := p.rewrite.Rewritten
 	resp, err := hostStream(p.hostRequest(p.send, true))
-	if err != nil && rewritten && p.cfg.fallback && rejected(err) {
+	if err != nil && (rewritten || p.rewrite.ToolsOnly) && p.cfg.fallback && rejected(err) {
 		logf(p.cfg, "warn", "upstream rejected the file-mode request, resending the original once", map[string]any{"id": p.recID(), "format": p.format, "model": p.model, "error": truncate(err.Error(), 300)})
 		p.fellBack(err)
 		rewritten = false

@@ -23,6 +23,8 @@ CLIProxyAPI（CPA，[router-for-me/CLIProxyAPI](https://github.com/router-for-me
 
 正文走的是工具调用和工具返回，CPA 内置翻译器对每种上游都会转（OpenAI 兼容的 `tool` 消息、Codex 的 `function_call_output`、Claude 的 `tool_result`、Gemini 的 `functionResponse`），所以不再需要翻译后的附件修补（旧版的 `request_normalizer` 和 Claude→Codex 退回内联都去掉了）。
 
+前缀缓存：只改写最新一轮，注入的两个工具每次都按同样字节追加在工具表末尾，补的读调用 id 固定（`call_filemode_read_1`），所以同一轮工具循环的各步前缀一致。`tool_choice: none` 的请求不改写消息，但照样补上这两个工具，让工具表（前缀最前面）和平时一致，不会整条重算。进入新一轮时，上一轮从「文件 + 读取」变回原文，缓存从上一轮的用户消息起断开，这是只改写最新一轮的代价。
+
 为什么不用 `request_interceptor` / `response_interceptor` / `response_stream_interceptor`：
 
 1. 模型名到渠道的解析发生在拦截器之前，拦截器改不了路由；只有 `model_router` 能接住一个注册表里不存在的 `file-xxx`，而它若返回 `provider` 目标，只能指定一个渠道，丢掉 CPA 的多渠道轮询和别名池。
@@ -93,12 +95,12 @@ plugins:
 
 每条记录：时间、编号（和 `debug_log` 日志行里的 `id` 对得上）、请求的模型（带前缀）、格式、是否流式、客户端（User-Agent）、耗时，以及两个结论：
 
-- **入站处理**：`正常`（本轮正文换成了 N 个文件，模型又自己读了几次）/ `未改写`（附原因，比如 `tool_choice none`、没有新用户消息）/ `被上游拒绝`（已退回原请求，附上游状态码和信息）。
+- **入站处理**：`正常`（本轮正文换成了 N 个文件，模型又自己读了几次）/ `只补工具表`（`tool_choice: none`，消息不动，只补工具保前缀缓存）/ `未改写`（附原因，比如没有新用户消息、工具重名）/ `被上游拒绝`（已退回原请求，附上游状态码和信息）。
 - **回复**：`正常`（模型调了 `submit_reply`，已还原成文字）/ `直接回文字`（没走回复工具，原样转发）/ `原样转发`（这次没改写）/ `失败`（上游错误或流中断，附原因）/ `进行中`。
 
 两处都能看：
 
-- 管理界面的插件菜单「文件模式 · 最近请求」（`/v0/resource/plugins/filemode/recent`）。CPA 的插件资源页不经管理鉴权，所以这一页里没有数据：填一次管理密钥（只存在这个浏览器的 localStorage），页面再带着密钥去取，可勾选每 5 秒自动刷新。
+- 管理界面的插件菜单「文件模式 · 最近请求」（`/v0/resource/plugins/filemode/recent`）。CPA 的插件资源页不经管理鉴权，所以这一页里没有数据：填一次管理密钥（只存在这个浏览器的 localStorage），页面再带着密钥去取，页面适配手机和深色模式：顶部按结论计数（点一下筛选），可按模型或客户端搜索，点一条展开详情，可开每 5 秒自动刷新（切到后台时暂停）。
 - 管理 API `GET /v0/management/filemode/recent`（需要管理密钥），返回 `{ "size": 20, "records": [...] }`，最新的在前。
 
 ## 构建
@@ -117,7 +119,7 @@ CPA 本体也必须是 CGO 构建（管理接口响应头 `X-CPA-SUPPORT-PLUGIN:
 ## 测试
 
 - `internal/recent/*_test.go`：环形记录（最新在前、缩容、0 = 不记）、错误截断、菜单页嵌入接口路径。
-- `internal/filemode/*_test.go`：请求改写（三种格式、轮次判定、工具循环里补的调用位置、`tool_choice: none`、重名工具、cache_control 挪到工具返回上）、读工具的返回和追加、非流式里「只调了读工具」的判定、流式闸门、非流式和三种流式还原（含混合调用、读调用去掉、工具序号重排、Codex 的 event/data 分块）。
+- `internal/filemode/*_test.go`：请求改写（三种格式、轮次判定、工具循环里补的调用位置、`tool_choice: none` 只补工具且工具表和改写时一致、重名工具、cache_control 挪到工具返回上）、读工具的返回和追加、非流式里「只调了读工具」的判定、流式闸门、非流式和三种流式还原（含混合调用、读调用去掉、工具序号重排、Codex 的 event/data 分块）。
 - `test/e2e/`：`mock_upstream.py` 同时扮演 OpenAI 兼容、Codex、Claude、Gemini 四种上游；`e2e_test.py` 覆盖不带前缀原样、带前缀剥离 + 正文只在读工具返回里 + 注入工具、非流式和流式还原、混合调用、直接回文字、模型再调读工具（重发一次、客户端只见回复）、被拒回退、`/v1/models`、Gemini 客户端格式、最近请求记录（要管理密钥、各种结论、不记不带前缀的请求、不含正文、菜单页不带数据）。
 
 ## 限制

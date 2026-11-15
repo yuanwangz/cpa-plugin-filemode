@@ -21,6 +21,23 @@ type RewriteResult struct {
 	Rewritten bool   // tools injected (and possibly texts moved into files)
 	Files     []File // the files of the turn, in order
 	Reason    string // why nothing was done, when Rewritten is false
+	// ToolsOnly: the messages were left alone but the reply and read tools
+	// were still appended (tool_choice none), so the tool table, which comes
+	// first in the upstream prefix, stays the same as on rewritten requests
+	// and the prefix cache holds.
+	ToolsOnly bool
+}
+
+// toolsOnly appends the injected tools to an otherwise untouched request.
+func toolsOnly(body []byte, tools []string, reason string) RewriteResult {
+	nb := body
+	var err error
+	for _, t := range tools {
+		if nb, err = appendTool(nb, t); err != nil {
+			return RewriteResult{Body: body, Reason: reason}
+		}
+	}
+	return RewriteResult{Body: nb, ToolsOnly: true, Reason: reason + " (tools only)"}
 }
 
 // SetModel sets the top-level "model" field of a request body.
@@ -273,11 +290,11 @@ func ResponsesReadItems(o Options, callID, args, result string) []string {
 
 func rewriteResponses(body []byte, o Options) RewriteResult {
 	root := gjson.ParseBytes(body)
-	if tc := root.Get("tool_choice"); tc.Type == gjson.String && tc.String() == "none" {
-		return RewriteResult{Body: body, Reason: "tool_choice none"}
-	}
 	if clientUsesTool(root, o.ToolName, o.ReadTool) {
 		return RewriteResult{Body: body, Reason: "tool name already used by client"}
+	}
+	if tc := root.Get("tool_choice"); tc.Type == gjson.String && tc.String() == "none" {
+		return toolsOnly(body, responsesTools(o), "tool_choice none")
 	}
 	input := root.Get("input")
 	var items []gjson.Result
@@ -310,10 +327,7 @@ func rewriteResponses(body []byte, o Options) RewriteResult {
 	if err != nil {
 		return RewriteResult{Body: body, Reason: err.Error()}
 	}
-	for _, t := range []string{
-		mustJSON(map[string]any{"type": "function", "name": o.ToolName, "description": o.ToolDesc, "parameters": replySchema()}),
-		mustJSON(map[string]any{"type": "function", "name": o.ReadTool, "description": o.ReadDesc, "parameters": readSchema()}),
-	} {
+	for _, t := range responsesTools(o) {
 		if nb, err = appendTool(nb, t); err != nil {
 			return RewriteResult{Body: body, Reason: err.Error()}
 		}
@@ -341,11 +355,11 @@ func ChatReadMessages(o Options, callID, args, result string) []string {
 
 func rewriteChat(body []byte, o Options) RewriteResult {
 	root := gjson.ParseBytes(body)
-	if tc := root.Get("tool_choice"); tc.Type == gjson.String && tc.String() == "none" {
-		return RewriteResult{Body: body, Reason: "tool_choice none"}
-	}
 	if clientUsesTool(root, o.ToolName, o.ReadTool) {
 		return RewriteResult{Body: body, Reason: "tool name already used by client"}
+	}
+	if tc := root.Get("tool_choice"); tc.Type == gjson.String && tc.String() == "none" {
+		return toolsOnly(body, chatTools(o), "tool_choice none")
 	}
 	items := root.Get("messages").Array()
 	isUser := func(m gjson.Result) bool { return m.Get("role").String() == "user" }
@@ -365,10 +379,7 @@ func rewriteChat(body []byte, o Options) RewriteResult {
 	if err != nil {
 		return RewriteResult{Body: body, Reason: err.Error()}
 	}
-	for _, t := range []string{
-		mustJSON(map[string]any{"type": "function", "function": map[string]any{"name": o.ToolName, "description": o.ToolDesc, "parameters": replySchema()}}),
-		mustJSON(map[string]any{"type": "function", "function": map[string]any{"name": o.ReadTool, "description": o.ReadDesc, "parameters": readSchema()}}),
-	} {
+	for _, t := range chatTools(o) {
 		if nb, err = appendTool(nb, t); err != nil {
 			return RewriteResult{Body: body, Reason: err.Error()}
 		}
@@ -400,11 +411,11 @@ func ClaudeReadMessages(o Options, callID, args, result, cache string) []string 
 
 func rewriteClaude(body []byte, o Options) RewriteResult {
 	root := gjson.ParseBytes(body)
-	if root.Get("tool_choice.type").String() == "none" {
-		return RewriteResult{Body: body, Reason: "tool_choice none"}
-	}
 	if clientUsesTool(root, o.ToolName, o.ReadTool) {
 		return RewriteResult{Body: body, Reason: "tool name already used by client"}
+	}
+	if root.Get("tool_choice.type").String() == "none" {
+		return toolsOnly(body, claudeTools(o), "tool_choice none")
 	}
 	items := root.Get("messages").Array()
 	// a user message holding only tool_result blocks is a tool-loop step, not a new message
@@ -439,10 +450,7 @@ func rewriteClaude(body []byte, o Options) RewriteResult {
 	if err != nil {
 		return RewriteResult{Body: body, Reason: err.Error()}
 	}
-	for _, t := range []string{
-		mustJSON(map[string]any{"name": o.ToolName, "description": o.ToolDesc, "input_schema": replySchema()}),
-		mustJSON(map[string]any{"name": o.ReadTool, "description": o.ReadDesc, "input_schema": readSchema()}),
-	} {
+	for _, t := range claudeTools(o) {
 		if nb, err = appendTool(nb, t); err != nil {
 			return RewriteResult{Body: body, Reason: err.Error()}
 		}
@@ -484,4 +492,27 @@ func AppendReadCall(format string, body []byte, o Options, callID, args string, 
 		return body
 	}
 	return out
+}
+
+// The injected tools (reply, then read) in each format. Built the same way on
+// every request so the tool table is byte-identical and the prefix cache holds.
+func responsesTools(o Options) []string {
+	return []string{
+		mustJSON(map[string]any{"type": "function", "name": o.ToolName, "description": o.ToolDesc, "parameters": replySchema()}),
+		mustJSON(map[string]any{"type": "function", "name": o.ReadTool, "description": o.ReadDesc, "parameters": readSchema()}),
+	}
+}
+
+func chatTools(o Options) []string {
+	return []string{
+		mustJSON(map[string]any{"type": "function", "function": map[string]any{"name": o.ToolName, "description": o.ToolDesc, "parameters": replySchema()}}),
+		mustJSON(map[string]any{"type": "function", "function": map[string]any{"name": o.ReadTool, "description": o.ReadDesc, "parameters": readSchema()}}),
+	}
+}
+
+func claudeTools(o Options) []string {
+	return []string{
+		mustJSON(map[string]any{"name": o.ToolName, "description": o.ToolDesc, "input_schema": replySchema()}),
+		mustJSON(map[string]any{"name": o.ReadTool, "description": o.ReadDesc, "input_schema": readSchema()}),
+	}
 }

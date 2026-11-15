@@ -78,7 +78,6 @@ func TestRewriteResponsesStringInputAndSkips(t *testing.T) {
 		t.Fatalf("%s", r.Body)
 	}
 	for _, b := range []string{
-		`{"input":"x","tool_choice":"none"}`,
 		`{"input":"x","tools":[{"type":"function","name":"submit_reply"}]}`,
 		`{"input":"x","tools":[{"type":"function","name":"read_message"}]}`,
 		`{"input":[{"type":"function_call_output","call_id":"a","output":"x"}]}`,
@@ -150,9 +149,6 @@ func TestRewriteClaude(t *testing.T) {
 	}
 	if gjson.GetBytes(r.Body, "tools.1.name").String() != "submit_reply" || gjson.GetBytes(r.Body, "tools.2.name").String() != "read_message" || !gjson.GetBytes(r.Body, "tools.2.input_schema").Exists() {
 		t.Fatal("tools")
-	}
-	if r := Rewrite(FormatClaude, []byte(`{"messages":[{"role":"user","content":"x"}],"tool_choice":{"type":"none"}}`), DefaultOptions()); r.Rewritten {
-		t.Fatal("tool_choice none should skip")
 	}
 }
 
@@ -456,5 +452,34 @@ func TestResponsesStreamSplitEventAndDataChunks(t *testing.T) {
 	last, _ := parseChunk([]byte(out[len(out)-1]))
 	if last[0].event != "response.completed" || gjson.Get(last[0].data, "response.output.0.content.0.text").String() != "x" {
 		t.Fatalf("%q", out[len(out)-1])
+	}
+}
+
+func TestToolChoiceNoneKeepsToolTable(t *testing.T) {
+	o := DefaultOptions()
+	cases := []struct {
+		format, body, msgs, toolName string
+	}{
+		{FormatClaude, `{"messages":[{"role":"user","content":"x"}],"tools":[{"name":"Read","input_schema":{}}],"tool_choice":{"type":"none"}}`, "messages", "name"},
+		{FormatChat, `{"messages":[{"role":"user","content":"x"}],"tools":[{"type":"function","function":{"name":"shell"}}],"tool_choice":"none"}`, "messages", "function.name"},
+		{FormatResponses, `{"input":[{"type":"message","role":"user","content":"x"}],"tools":[{"type":"function","name":"shell"}],"tool_choice":"none"}`, "input", "name"},
+	}
+	for _, c := range cases {
+		r := Rewrite(c.format, []byte(c.body), o)
+		if r.Rewritten || !r.ToolsOnly {
+			t.Fatalf("%s: %+v", c.format, r)
+		}
+		if gjson.GetBytes(r.Body, c.msgs).Raw != gjson.Get(c.body, c.msgs).Raw {
+			t.Fatalf("%s: messages touched: %s", c.format, r.Body)
+		}
+		tools := gjson.GetBytes(r.Body, "tools").Array()
+		if len(tools) != 3 || tools[1].Get(c.toolName).String() != o.ToolName || tools[2].Get(c.toolName).String() != o.ReadTool {
+			t.Fatalf("%s: tools %s", c.format, gjson.GetBytes(r.Body, "tools").Raw)
+		}
+		// same tool table as a rewritten request of the same client
+		full := Rewrite(c.format, []byte(strings.Replace(strings.Replace(c.body, `,"tool_choice":"none"`, "", 1), `,"tool_choice":{"type":"none"}`, "", 1)), o)
+		if !full.Rewritten || gjson.GetBytes(full.Body, "tools").Raw != gjson.GetBytes(r.Body, "tools").Raw {
+			t.Fatalf("%s: tool table differs\n%s\n%s", c.format, gjson.GetBytes(full.Body, "tools").Raw, gjson.GetBytes(r.Body, "tools").Raw)
+		}
 	}
 }
