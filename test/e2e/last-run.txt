@@ -1,0 +1,264 @@
+CPA up
+PASS /v1/models lists prefixed aliases (file-oa-reply, file-cl-reply, file-cx-reply, file-gm-reply)
+PASS /v1/models keeps the plain models
+PASS no prefix: chat -> oa-text request untouched (no tool, no file, text inline)
+PASS no prefix: chat -> oa-text plain answer
+PASS no prefix: responses -> oa-text request untouched (no tool, no file, text inline)
+PASS no prefix: responses -> oa-text plain answer
+PASS no prefix: claude -> cl-text request untouched (no tool, no file, text inline)
+PASS no prefix: claude -> cl-text plain answer
+PASS no prefix: responses -> cx-text request untouched (no tool, no file, text inline)
+PASS no prefix: responses -> cx-text plain answer
+PASS history untouched, two new messages -> msg-1.md / msg-2.md, image kept
+PASS [responses->oa non-stream] HTTP 200
+PASS [responses->oa non-stream] prefix stripped (upstream model oa-reply)
+PASS [responses->oa non-stream] submit_reply tool injected
+PASS [responses->oa non-stream] instruction appended
+PASS [responses->oa non-stream] new message body travels as attachment (file part (chat))
+PASS [responses->oa non-stream] message text not left inline
+PASS [responses->oa non-stream] reply restored as plain text
+PASS [responses->oa non-stream] client never sees submit_reply
+PASS [responses->cl non-stream] HTTP 200
+PASS [responses->cl non-stream] prefix stripped (upstream model cl-reply)
+PASS [responses->cl non-stream] submit_reply tool injected
+PASS [responses->cl non-stream] instruction appended
+PASS [responses->cl non-stream] new message body travels as attachment (document text source)
+PASS [responses->cl non-stream] message text not left inline
+PASS [responses->cl non-stream] reply restored as plain text
+PASS [responses->cl non-stream] client never sees submit_reply
+PASS [responses->cx non-stream] HTTP 200
+PASS [responses->cx non-stream] prefix stripped (upstream model cx-reply)
+PASS [responses->cx non-stream] submit_reply tool injected
+PASS [responses->cx non-stream] instruction appended
+PASS [responses->cx non-stream] new message body travels as attachment (input_file)
+PASS [responses->cx non-stream] message text not left inline
+PASS [responses->cx non-stream] reply restored as plain text
+PASS [responses->cx non-stream] client never sees submit_reply
+PASS [responses->gm non-stream] HTTP 200
+PASS [responses->gm non-stream] prefix stripped (upstream model gm-reply)
+PASS [responses->gm non-stream] submit_reply tool injected
+PASS [responses->gm non-stream] instruction appended
+PASS [responses->gm non-stream] new message body travels as attachment (inline_data text/plain)
+PASS [responses->gm non-stream] message text not left inline
+PASS [responses->gm non-stream] reply restored as plain text
+PASS [responses->gm non-stream] client never sees submit_reply
+PASS [chat->oa non-stream] HTTP 200
+PASS [chat->oa non-stream] prefix stripped (upstream model oa-reply)
+PASS [chat->oa non-stream] submit_reply tool injected
+PASS [chat->oa non-stream] instruction appended
+PASS [chat->oa non-stream] new message body travels as attachment (file part (chat))
+PASS [chat->oa non-stream] message text not left inline
+PASS [chat->oa non-stream] reply restored as plain text
+PASS [chat->oa non-stream] client never sees submit_reply
+PASS [chat->cl non-stream] HTTP 200
+PASS [chat->cl non-stream] prefix stripped (upstream model cl-reply)
+PASS [chat->cl non-stream] submit_reply tool injected
+PASS [chat->cl non-stream] instruction appended
+PASS [chat->cl non-stream] new message body travels as attachment (document text source)
+PASS [chat->cl non-stream] message text not left inline
+PASS [chat->cl non-stream] reply restored as plain text
+PASS [chat->cl non-stream] client never sees submit_reply
+PASS [chat->cx non-stream] HTTP 200
+PASS [chat->cx non-stream] prefix stripped (upstream model cx-reply)
+PASS [chat->cx non-stream] submit_reply tool injected
+PASS [chat->cx non-stream] instruction appended
+PASS [chat->cx non-stream] new message body travels as attachment (input_file)
+PASS [chat->cx non-stream] message text not left inline
+PASS [chat->cx non-stream] reply restored as plain text
+PASS [chat->cx non-stream] client never sees submit_reply
+PASS [chat->gm non-stream] HTTP 200
+PASS [chat->gm non-stream] prefix stripped (upstream model gm-reply)
+PASS [chat->gm non-stream] submit_reply tool injected
+PASS [chat->gm non-stream] instruction appended
+PASS [chat->gm non-stream] new message body travels as attachment (inline_data text/plain)
+PASS [chat->gm non-stream] message text not left inline
+PASS [chat->gm non-stream] reply restored as plain text
+PASS [chat->gm non-stream] client never sees submit_reply
+PASS [claude->oa non-stream] HTTP 200
+PASS [claude->oa non-stream] prefix stripped (upstream model oa-reply)
+PASS [claude->oa non-stream] submit_reply tool injected
+PASS [claude->oa non-stream] instruction appended
+PASS [claude->oa non-stream] new message body travels as attachment (file part (chat))
+PASS [claude->oa non-stream] message text not left inline
+PASS [claude->oa non-stream] reply restored as plain text
+PASS [claude->oa non-stream] client never sees submit_reply
+PASS [claude->cl non-stream] HTTP 200
+PASS [claude->cl non-stream] prefix stripped (upstream model cl-reply)
+PASS [claude->cl non-stream] submit_reply tool injected
+PASS [claude->cl non-stream] instruction appended
+PASS [claude->cl non-stream] new message body travels as attachment (document text source)
+PASS [claude->cl non-stream] message text not left inline
+PASS [claude->cl non-stream] reply restored as plain text
+PASS [claude->cl non-stream] client never sees submit_reply
+PASS [claude->cx non-stream] HTTP 200
+PASS [claude->cx non-stream] prefix stripped (upstream model cx-reply)
+PASS [claude->cx non-stream] submit_reply tool injected
+PASS [claude->cx non-stream] instruction appended
+PASS [claude->cx non-stream] text kept inline (translator would drop the file)
+PASS [claude->cx non-stream] reply restored as plain text
+PASS [claude->cx non-stream] client never sees submit_reply
+PASS [claude->gm non-stream] HTTP 200
+PASS [claude->gm non-stream] prefix stripped (upstream model gm-reply)
+PASS [claude->gm non-stream] submit_reply tool injected
+PASS [claude->gm non-stream] instruction appended
+PASS [claude->gm non-stream] new message body travels as attachment (inline_data text/plain)
+PASS [claude->gm non-stream] message text not left inline
+PASS [claude->gm non-stream] reply restored as plain text
+PASS [claude->gm non-stream] client never sees submit_reply
+PASS [responses->oa stream] HTTP 200
+PASS [responses->oa stream] prefix stripped (upstream model oa-reply)
+PASS [responses->oa stream] submit_reply tool injected
+PASS [responses->oa stream] instruction appended
+PASS [responses->oa stream] new message body travels as attachment (file part (chat))
+PASS [responses->oa stream] message text not left inline
+PASS [responses->oa stream] reply restored as plain text
+PASS [responses->oa stream] client never sees submit_reply
+PASS [responses->oa stream] response.completed output carries the text
+PASS [responses->cl stream] HTTP 200
+PASS [responses->cl stream] prefix stripped (upstream model cl-reply)
+PASS [responses->cl stream] submit_reply tool injected
+PASS [responses->cl stream] instruction appended
+PASS [responses->cl stream] new message body travels as attachment (document text source)
+PASS [responses->cl stream] message text not left inline
+PASS [responses->cl stream] reply restored as plain text
+PASS [responses->cl stream] client never sees submit_reply
+PASS [responses->cl stream] response.completed output carries the text
+PASS [responses->cx stream] HTTP 200
+PASS [responses->cx stream] prefix stripped (upstream model cx-reply)
+PASS [responses->cx stream] submit_reply tool injected
+PASS [responses->cx stream] instruction appended
+PASS [responses->cx stream] new message body travels as attachment (input_file)
+PASS [responses->cx stream] message text not left inline
+PASS [responses->cx stream] reply restored as plain text
+PASS [responses->cx stream] client never sees submit_reply
+PASS [responses->cx stream] response.completed output carries the text
+PASS [responses->gm stream] HTTP 200
+PASS [responses->gm stream] prefix stripped (upstream model gm-reply)
+PASS [responses->gm stream] submit_reply tool injected
+PASS [responses->gm stream] instruction appended
+PASS [responses->gm stream] new message body travels as attachment (inline_data text/plain)
+PASS [responses->gm stream] message text not left inline
+PASS [responses->gm stream] reply restored as plain text
+PASS [responses->gm stream] client never sees submit_reply
+PASS [responses->gm stream] response.completed output carries the text
+PASS [chat->oa stream] HTTP 200
+PASS [chat->oa stream] prefix stripped (upstream model oa-reply)
+PASS [chat->oa stream] submit_reply tool injected
+PASS [chat->oa stream] instruction appended
+PASS [chat->oa stream] new message body travels as attachment (file part (chat))
+PASS [chat->oa stream] message text not left inline
+PASS [chat->oa stream] reply restored as plain text
+PASS [chat->oa stream] client never sees submit_reply
+PASS [chat->cl stream] HTTP 200
+PASS [chat->cl stream] prefix stripped (upstream model cl-reply)
+PASS [chat->cl stream] submit_reply tool injected
+PASS [chat->cl stream] instruction appended
+PASS [chat->cl stream] new message body travels as attachment (document text source)
+PASS [chat->cl stream] message text not left inline
+PASS [chat->cl stream] reply restored as plain text
+PASS [chat->cl stream] client never sees submit_reply
+PASS [chat->cx stream] HTTP 200
+PASS [chat->cx stream] prefix stripped (upstream model cx-reply)
+PASS [chat->cx stream] submit_reply tool injected
+PASS [chat->cx stream] instruction appended
+PASS [chat->cx stream] new message body travels as attachment (input_file)
+PASS [chat->cx stream] message text not left inline
+PASS [chat->cx stream] reply restored as plain text
+PASS [chat->cx stream] client never sees submit_reply
+PASS [chat->gm stream] HTTP 200
+PASS [chat->gm stream] prefix stripped (upstream model gm-reply)
+PASS [chat->gm stream] submit_reply tool injected
+PASS [chat->gm stream] instruction appended
+PASS [chat->gm stream] new message body travels as attachment (inline_data text/plain)
+PASS [chat->gm stream] message text not left inline
+PASS [chat->gm stream] reply restored as plain text
+PASS [chat->gm stream] client never sees submit_reply
+PASS [claude->oa stream] HTTP 200
+PASS [claude->oa stream] prefix stripped (upstream model oa-reply)
+PASS [claude->oa stream] submit_reply tool injected
+PASS [claude->oa stream] instruction appended
+PASS [claude->oa stream] new message body travels as attachment (file part (chat))
+PASS [claude->oa stream] message text not left inline
+PASS [claude->oa stream] reply restored as plain text
+PASS [claude->oa stream] client never sees submit_reply
+PASS [claude->cl stream] HTTP 200
+PASS [claude->cl stream] prefix stripped (upstream model cl-reply)
+PASS [claude->cl stream] submit_reply tool injected
+PASS [claude->cl stream] instruction appended
+PASS [claude->cl stream] new message body travels as attachment (document text source)
+PASS [claude->cl stream] message text not left inline
+PASS [claude->cl stream] reply restored as plain text
+PASS [claude->cl stream] client never sees submit_reply
+PASS [claude->cx stream] HTTP 200
+PASS [claude->cx stream] prefix stripped (upstream model cx-reply)
+PASS [claude->cx stream] submit_reply tool injected
+PASS [claude->cx stream] instruction appended
+PASS [claude->cx stream] text kept inline (translator would drop the file)
+PASS [claude->cx stream] reply restored as plain text
+PASS [claude->cx stream] client never sees submit_reply
+PASS [claude->gm stream] HTTP 200
+PASS [claude->gm stream] prefix stripped (upstream model gm-reply)
+PASS [claude->gm stream] submit_reply tool injected
+PASS [claude->gm stream] instruction appended
+PASS [claude->gm stream] new message body travels as attachment (inline_data text/plain)
+PASS [claude->gm stream] message text not left inline
+PASS [claude->gm stream] reply restored as plain text
+PASS [claude->gm stream] client never sees submit_reply
+PASS [gemini client->oa non-stream] file attached upstream, prefix stripped
+PASS [gemini client->oa non-stream] reply restored as text
+PASS [mixed responses->oa non-stream] other tool call kept, submit_reply turned into text
+PASS [mixed responses->cl non-stream] other tool call kept, submit_reply turned into text
+PASS [mixed responses->cx non-stream] other tool call kept, submit_reply turned into text
+PASS [mixed responses->gm non-stream] other tool call kept, submit_reply turned into text
+PASS [mixed chat->oa non-stream] other tool call kept, submit_reply turned into text
+PASS [mixed chat->cl non-stream] other tool call kept, submit_reply turned into text
+PASS [mixed chat->cx non-stream] other tool call kept, submit_reply turned into text
+PASS [mixed chat->gm non-stream] other tool call kept, submit_reply turned into text
+PASS [mixed claude->oa non-stream] other tool call kept, submit_reply turned into text
+PASS [mixed claude->cl non-stream] other tool call kept, submit_reply turned into text
+PASS [mixed claude->cx non-stream] other tool call kept, submit_reply turned into text
+PASS [mixed claude->gm non-stream] other tool call kept, submit_reply turned into text
+PASS [direct text responses->oa non-stream] passes through
+PASS [direct text chat->cl non-stream] passes through
+PASS [direct text claude->gm non-stream] passes through
+PASS [direct text responses->cx non-stream] passes through
+PASS [reject responses->oa non-stream] first attempt had files, resent once as the original
+PASS [reject responses->oa non-stream] client gets the plain answer
+PASS [reject chat->oa non-stream] first attempt had files, resent once as the original
+PASS [reject chat->oa non-stream] client gets the plain answer
+PASS [reject claude->cl non-stream] first attempt had files, resent once as the original
+PASS [reject claude->cl non-stream] client gets the plain answer
+PASS [reject responses->gm non-stream] first attempt had files, resent once as the original
+PASS [reject responses->gm non-stream] client gets the plain answer
+PASS [reject chat->cx non-stream] first attempt had files, resent once as the original
+PASS [reject chat->cx non-stream] client gets the plain answer
+PASS [gemini client->oa stream] file attached upstream, prefix stripped
+PASS [gemini client->oa stream] reply restored as text
+PASS [mixed responses->oa stream] other tool call kept, submit_reply turned into text
+PASS [mixed responses->cl stream] other tool call kept, submit_reply turned into text
+PASS [mixed responses->cx stream] other tool call kept, submit_reply turned into text
+PASS [mixed responses->gm stream] other tool call kept, submit_reply turned into text
+PASS [mixed chat->oa stream] other tool call kept, submit_reply turned into text
+PASS [mixed chat->cl stream] other tool call kept, submit_reply turned into text
+PASS [mixed chat->cx stream] other tool call kept, submit_reply turned into text
+PASS [mixed chat->gm stream] other tool call kept, submit_reply turned into text
+PASS [mixed claude->oa stream] other tool call kept, submit_reply turned into text
+PASS [mixed claude->cl stream] other tool call kept, submit_reply turned into text
+PASS [mixed claude->cx stream] other tool call kept, submit_reply turned into text
+PASS [mixed claude->gm stream] other tool call kept, submit_reply turned into text
+PASS [direct text responses->oa stream] passes through
+PASS [direct text chat->cl stream] passes through
+PASS [direct text claude->gm stream] passes through
+PASS [direct text responses->cx stream] passes through
+PASS [reject responses->oa stream] first attempt had files, resent once as the original
+PASS [reject responses->oa stream] client gets the plain answer
+PASS [reject chat->oa stream] first attempt had files, resent once as the original
+PASS [reject chat->oa stream] client gets the plain answer
+PASS [reject claude->cl stream] first attempt had files, resent once as the original
+PASS [reject claude->cl stream] client gets the plain answer
+PASS [reject responses->gm stream] first attempt had files, resent once as the original
+PASS [reject responses->gm stream] client gets the plain answer
+PASS [reject chat->cx stream] first attempt had files, resent once as the original
+PASS [reject chat->cx stream] client gets the plain answer
+
+SUMMARY: 261/261 passed

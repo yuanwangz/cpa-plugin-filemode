@@ -1,0 +1,70 @@
+config-version: 8
+server:
+  host: "127.0.0.1"
+  port: __CPA_PORT__
+management:
+  secret-key: "mgmt-secret"
+  disable-control-panel: true
+access:
+  api-keys:
+    - "test-key"
+oauth:
+  auth-dir: "__DIR__/auths"
+observability:
+  logs:
+    debug: false
+api-keys:
+  openai-compatibility:
+    - name: "mockoa"
+      base-url: "http://127.0.0.1:__MOCK_PORT__/v1"
+      keys:
+        - api-key: "sk-mock"
+      models:
+        - {name: "oa-reply", alias: "oa-reply"}
+        - {name: "oa-mixed", alias: "oa-mixed"}
+        - {name: "oa-text", alias: "oa-text"}
+        - {name: "oa-reject", alias: "oa-reject"}
+  claude:
+    - name: "mockcl"
+      base-url: "http://127.0.0.1:__MOCK_PORT__"
+      keys:
+        - api-key: "sk-ant-mock"
+      models:
+        - {name: "cl-reply", alias: "cl-reply"}
+        - {name: "cl-mixed", alias: "cl-mixed"}
+        - {name: "cl-text", alias: "cl-text"}
+        - {name: "cl-reject", alias: "cl-reject"}
+  codex:
+    - name: "mockcx"
+      base-url: "http://127.0.0.1:__MOCK_PORT__/codex"
+      keys:
+        - api-key: "sk-codex-mock"
+      models:
+        - {name: "cx-reply", alias: "cx-reply"}
+        - {name: "cx-mixed", alias: "cx-mixed"}
+        - {name: "cx-text", alias: "cx-text"}
+        - {name: "cx-reject", alias: "cx-reject"}
+  gemini:
+    - name: "mockgm"
+      base-url: "http://127.0.0.1:__MOCK_PORT__"
+      keys:
+        - api-key: "AIza-mock"
+      models:
+        - {name: "gm-reply", alias: "gm-reply"}
+        - {name: "gm-mixed", alias: "gm-mixed"}
+        - {name: "gm-text", alias: "gm-text"}
+        - {name: "gm-reject", alias: "gm-reject"}
+plugins:
+  enabled: true
+  dir: "__DIR__/plugins"
+  configs:
+    filemode:
+      enabled: true
+      priority: 10
+      prefix: "file-"
+      tool_name: "submit_reply"
+      fallback: true
+      upstream_fixups: true
+      list_models: "auto"
+      models: ["oa-text"]
+      debug_log: true

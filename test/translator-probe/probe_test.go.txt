@@ -1,0 +1,39 @@
+package fmprobe
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"testing"
+
+	_ "github.com/router-for-me/CLIProxyAPI/v8/internal/translator"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
+)
+
+const md = "data:text/markdown;base64,5L2g5aW9ICoqd29ybGQqKg==" // 你好 **world**
+
+var sources = map[string]string{
+	"openai-response": `{"model":"m","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"[message text in the attached file msg-1.md]\n\nUse submit_reply"},{"type":"input_file","filename":"msg-1.md","file_data":"` + md + `"},{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgo="}]}],"tools":[{"type":"function","name":"submit_reply","description":"d","parameters":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}}]}`,
+	"openai":          `{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"[message text in the attached file msg-1.md]"},{"type":"file","file":{"filename":"msg-1.md","file_data":"` + md + `"}},{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo="}}]}],"tools":[{"type":"function","function":{"name":"submit_reply","description":"d","parameters":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}}}]}`,
+	"claude":          `{"model":"m","max_tokens":100,"messages":[{"role":"user","content":[{"type":"text","text":"[message text in the attached file msg-1.md]"},{"type":"document","title":"msg-1.md","source":{"type":"text","media_type":"text/plain","data":"你好 **world**"}},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]}],"tools":[{"name":"submit_reply","description":"d","input_schema":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}}]}`,
+	"claude-b64":      `{"model":"m","max_tokens":100,"messages":[{"role":"user","content":[{"type":"text","text":"[message text in the attached file msg-1.md]"},{"type":"document","title":"msg-1.md","source":{"type":"base64","media_type":"text/plain","data":"5L2g5aW9ICoqd29ybGQqKg=="}}]}]}`,
+}
+
+func TestProbe(t *testing.T) {
+	targets := []string{"openai", "openai-response", "codex", "claude", "gemini", "antigravity", "gemini-cli"}
+	for _, src := range []string{"openai-response", "openai", "claude", "claude-b64"} {
+		from := src
+		if src == "claude-b64" {
+			from = "claude"
+		}
+		for _, to := range targets {
+			if !sdktranslator.Default().HasRequestTransformer(sdktranslator.FromString(from), sdktranslator.FromString(to)) && from != to {
+				fmt.Printf("### %s -> %s : NO TRANSFORMER\n", src, to)
+				continue
+			}
+			out := sdktranslator.Default().TranslateRequestEnvelope(context.Background(), sdktranslator.FromString(from), sdktranslator.FromString(to), sdktranslator.RequestEnvelope{Format: sdktranslator.FromString(from), Model: "m", Stream: false, Body: []byte(sources[src])})
+			fmt.Printf("### %s -> %s\n%s\n", src, to, out.Body)
+		}
+	}
+	_ = os.Stdout
+}
