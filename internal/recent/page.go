@@ -120,14 +120,14 @@ const tag=(k,t)=>'<span class="tag t-'+k+'">'+esc(t)+'</span>';
 let records=[],size=0,filter='all',open=new Set(),timer=null,busy=false;
 const V={ok:['ok','正常'],warn:['warn','注意'],bad:['bad','失败'],dim:['dim','未生效'],run:['info','进行中']};
 function verdict(r){if(r.reply==='error')return'bad';if(r.reply==='pending')return'run';
- if(r.inbound==='rewritten'&&r.reply==='tool')return'ok';if(r.inbound==='skipped'||r.inbound==='tools_only')return'dim';return'warn';}
+ if(r.inbound==='rewritten'&&(r.reply_tool?r.reply==='tool':(r.reply==='text'||r.reply==='plain')))return'ok';if(r.inbound==='skipped'||r.inbound==='tools_only')return'dim';return'warn';}
 function inbound(r){switch(r.inbound){
  case'rewritten':return['改写成 '+r.files+' 个文件',r.reads?'模型又读了 '+r.reads+' 次':'消息走读取工具送达'];
  case'tools_only':return['只补了工具表','tool_choice=none，不改写消息，保住前缀缓存'];
  case'fallback':return['被上游拒绝，已退回原请求',r.note||''];
  default:return['未改写',r.note||''];}}
 function reply(r){switch(r.reply){
- case'tool':return['回复工具已还原成文字',''];case'plain':return['模型直接回了文字','没走回复工具，原样转发'];
+ case'tool':return['回复工具已还原成文字',''];case'plain':return r.reply_tool?['模型直接回了文字','没走回复工具，原样转发']:['文字回复','这次回复工具是关的'];case'text':return['文字回复','这次回复工具是关的'];
  case'pass':return['原样转发',''];case'pending':return['等待上游…',''];
  default:return['出错'+(r.status?' · HTTP '+r.status:''),r.error||''];}}
 function ago(t){const s=(Date.now()-new Date(t))/1000;if(s<60)return'刚刚';if(s<3600)return Math.floor(s/60)+' 分钟前';if(s<86400)return Math.floor(s/3600)+' 小时前';return new Date(t).toLocaleDateString();}
@@ -152,7 +152,7 @@ function render(){stats();const q=$('q').value.trim().toLowerCase();
    +'<div class="cell inb"><span class="lbl">入站</span>'+esc(i[0])+(i[1]?'<div class="d'+(r.inbound==='fallback'?' err':'')+'">'+esc(i[1])+'</div>':'')+'</div>'
    +'<div class="cell rep"><span class="lbl">回复</span>'+esc(p[0])+(p[1]?'<div class="d'+(r.reply==='error'?' err':'')+'">'+esc(p[1])+'</div>':'')+'</div>'
    +'<div class="dur mono">'+dur(r)+'</div>'
-   +'<div class="detail"><div class="kv"><div>编号</div><div class="mono">'+esc(r.id)+'</div><div>时间</div><div>'+esc(new Date(r.at).toLocaleString())+'</div><div>耗时</div><div>'+dur(r)+'</div><div>格式</div><div>'+esc(r.format)+(r.stream?' · 流式':' · 非流式')+'</div><div>客户端</div><div>'+esc(r.client||'—')+'</div>'
+   +'<div class="detail"><div class="kv"><div>编号</div><div class="mono">'+esc(r.id)+'</div><div>时间</div><div>'+esc(new Date(r.at).toLocaleString())+'</div><div>耗时</div><div>'+dur(r)+'</div><div>格式</div><div>'+esc(r.format)+(r.stream?' · 流式':' · 非流式')+'</div><div>客户端</div><div>'+esc(r.client||'—')+'</div><div>回复工具</div><div>'+(r.reply_tool?'开':'关')+'</div>'
    +(r.note?'<div>说明</div><div>'+esc(r.note)+'</div>':'')+(r.error?'<div>错误</div><div class="err">'+esc(r.error)+'</div>':'')+'</div></div></div>';}).join('');
  $('list').querySelectorAll('.item').forEach((el)=>el.onclick=(e)=>{if(e.target.closest('.detail'))return;const id=el.dataset.id;open.has(id)?open.delete(id):open.add(id);el.classList.toggle('open');});}
 function showKey(on){$('keybox').hidden=!on;$('keyline').hidden=on||!localStorage.getItem(KEY);if(on)setTimeout(()=>$('key').focus(),0);}

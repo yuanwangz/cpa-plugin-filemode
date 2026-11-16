@@ -290,7 +290,7 @@ func ResponsesReadItems(o Options, callID, args, result string) []string {
 
 func rewriteResponses(body []byte, o Options) RewriteResult {
 	root := gjson.ParseBytes(body)
-	if clientUsesTool(root, o.ToolName, o.ReadTool) {
+	if clientUsesTool(root, o.ownTools()...) {
 		return RewriteResult{Body: body, Reason: "tool name already used by client"}
 	}
 	if tc := root.Get("tool_choice"); tc.Type == gjson.String && tc.String() == "none" {
@@ -355,7 +355,7 @@ func ChatReadMessages(o Options, callID, args, result string) []string {
 
 func rewriteChat(body []byte, o Options) RewriteResult {
 	root := gjson.ParseBytes(body)
-	if clientUsesTool(root, o.ToolName, o.ReadTool) {
+	if clientUsesTool(root, o.ownTools()...) {
 		return RewriteResult{Body: body, Reason: "tool name already used by client"}
 	}
 	if tc := root.Get("tool_choice"); tc.Type == gjson.String && tc.String() == "none" {
@@ -411,7 +411,7 @@ func ClaudeReadMessages(o Options, callID, args, result, cache string) []string 
 
 func rewriteClaude(body []byte, o Options) RewriteResult {
 	root := gjson.ParseBytes(body)
-	if clientUsesTool(root, o.ToolName, o.ReadTool) {
+	if clientUsesTool(root, o.ownTools()...) {
 		return RewriteResult{Body: body, Reason: "tool name already used by client"}
 	}
 	if root.Get("tool_choice.type").String() == "none" {
@@ -497,22 +497,25 @@ func AppendReadCall(format string, body []byte, o Options, callID, args string, 
 // The injected tools (reply, then read) in each format. Built the same way on
 // every request so the tool table is byte-identical and the prefix cache holds.
 func responsesTools(o Options) []string {
-	return []string{
-		mustJSON(map[string]any{"type": "function", "name": o.ToolName, "description": o.ToolDesc, "parameters": replySchema()}),
-		mustJSON(map[string]any{"type": "function", "name": o.ReadTool, "description": o.ReadDesc, "parameters": readSchema()}),
+	read := mustJSON(map[string]any{"type": "function", "name": o.ReadTool, "description": o.ReadDesc, "parameters": readSchema()})
+	if o.NoReply {
+		return []string{read}
 	}
+	return []string{mustJSON(map[string]any{"type": "function", "name": o.ToolName, "description": o.ToolDesc, "parameters": replySchema()}), read}
 }
 
 func chatTools(o Options) []string {
-	return []string{
-		mustJSON(map[string]any{"type": "function", "function": map[string]any{"name": o.ToolName, "description": o.ToolDesc, "parameters": replySchema()}}),
-		mustJSON(map[string]any{"type": "function", "function": map[string]any{"name": o.ReadTool, "description": o.ReadDesc, "parameters": readSchema()}}),
+	read := mustJSON(map[string]any{"type": "function", "function": map[string]any{"name": o.ReadTool, "description": o.ReadDesc, "parameters": readSchema()}})
+	if o.NoReply {
+		return []string{read}
 	}
+	return []string{mustJSON(map[string]any{"type": "function", "function": map[string]any{"name": o.ToolName, "description": o.ToolDesc, "parameters": replySchema()}}), read}
 }
 
 func claudeTools(o Options) []string {
-	return []string{
-		mustJSON(map[string]any{"name": o.ToolName, "description": o.ToolDesc, "input_schema": replySchema()}),
-		mustJSON(map[string]any{"name": o.ReadTool, "description": o.ReadDesc, "input_schema": readSchema()}),
+	read := mustJSON(map[string]any{"name": o.ReadTool, "description": o.ReadDesc, "input_schema": readSchema()})
+	if o.NoReply {
+		return []string{read}
 	}
+	return []string{mustJSON(map[string]any{"name": o.ToolName, "description": o.ToolDesc, "input_schema": replySchema()}), read}
 }

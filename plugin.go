@@ -17,7 +17,7 @@ import (
 )
 
 // pluginVersion is overridden at release build time: -ldflags "-X main.pluginVersion=<ver>".
-var pluginVersion = "0.4.0"
+var pluginVersion = "0.5.0"
 
 const (
 	pluginName     = "filemode"
@@ -33,6 +33,7 @@ type pluginConfig struct {
 	Prefix       string   `yaml:"prefix"`
 	ToolName     string   `yaml:"tool_name"`
 	ReadToolName string   `yaml:"read_tool_name"`
+	ReplyTool    *bool    `yaml:"reply_tool"`
 	Fallback     *bool    `yaml:"fallback"`
 	MaxReads     *int     `yaml:"max_reads"`
 	ListModels   string   `yaml:"list_models"`
@@ -45,6 +46,7 @@ type config struct {
 	prefix     string
 	toolName   string
 	readTool   string
+	replyTool  bool // inject the reply tool and its instruction; off: the model answers in plain text
 	fallback   bool
 	maxReads   int    // times a request is sent again when the model calls the read tool itself
 	listModels string // auto | config | off
@@ -54,7 +56,7 @@ type config struct {
 }
 
 func defaultConfig() config {
-	return config{prefix: "file-", toolName: filemode.DefaultToolName, readTool: filemode.DefaultReadToolName, fallback: true, maxReads: 2, listModels: "auto", recentSize: 20}
+	return config{prefix: "file-", toolName: filemode.DefaultToolName, readTool: filemode.DefaultReadToolName, replyTool: true, fallback: true, maxReads: 2, listModels: "auto", recentSize: 20}
 }
 
 var current atomic.Pointer[config]
@@ -93,6 +95,9 @@ func parseConfig(raw []byte) (config, error) {
 	if cfg.readTool == cfg.toolName {
 		return cfg, fmt.Errorf("filemode: tool_name and read_tool_name must differ")
 	}
+	if pc.ReplyTool != nil {
+		cfg.replyTool = *pc.ReplyTool
+	}
 	if pc.Fallback != nil {
 		cfg.fallback = *pc.Fallback
 	}
@@ -128,10 +133,19 @@ func (c config) options() filemode.Options {
 	o := filemode.DefaultOptions()
 	o.ToolName = c.toolName
 	o.ReadTool = c.readTool
+	o.NoReply = !c.replyTool
 	return o
 }
 
-func (c config) tools() filemode.Tools { return filemode.Tools{Reply: c.toolName, Read: c.readTool} }
+// tools names the plugin tools a response may carry; with the reply tool off a
+// client tool that happens to share its name is left alone.
+func (c config) tools() filemode.Tools {
+	t := filemode.Tools{Reply: c.toolName, Read: c.readTool}
+	if !c.replyTool {
+		t.Reply = ""
+	}
+	return t
+}
 
 type lifecycleRequest struct {
 	ConfigYAML []byte `json:"config_yaml"`
@@ -202,6 +216,7 @@ func buildRegistration(cfg config) registration {
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "prefix", Type: pluginapi.ConfigFieldTypeString, Default: "file-", Description: "开启文件模式的模型名前缀：请求 file-gpt-5.5 实际按 gpt-5.5 发出。不带这个前缀的请求不受影响。"},
 				{Name: "tool_name", Type: pluginapi.ConfigFieldTypeString, Default: filemode.DefaultToolName, Description: "注入给模型的回复工具名（参数 content）。模型调用它回复，插件再把它还原成普通文字回复。"},
+				{Name: "reply_tool", Type: pluginapi.ConfigFieldTypeBoolean, Default: true, Description: "回复是否走回复工具。开：注入回复工具和一句中性的提示，模型的最终答复经它交出、由插件还原成文字。关：回复工具和提示都不注入，模型直接回文字（可逐字流式），只保留读取工具把正文送进去。"},
 				{Name: "read_tool_name", Type: pluginapi.ConfigFieldTypeString, Default: filemode.DefaultReadToolName, Description: "读取工具名。请求里会补上一次「模型已调用它」及其返回（返回里就是本轮消息正文）；模型再调用时由插件自己作答。须与回复工具名不同。"},
 				{Name: "max_reads", Type: pluginapi.ConfigFieldTypeInteger, Default: 2, Description: "模型自己又调用读取工具时，插件作答后重发请求的最多次数（0 = 不重发，这次调用直接丢掉）。范围 0–5。"},
 				{Name: "fallback", Type: pluginapi.ConfigFieldTypeBoolean, Default: true, Description: "上游拒收改写后的请求（HTTP 400/413/415/422）时，改用原始请求重发一次。"},
@@ -381,6 +396,7 @@ func prepare(raw []byte, record bool) (*prepared, []byte) {
 			Model: strings.TrimSpace(req.Model), Format: format, Stream: req.Stream,
 			Client:  recent.Clip(req.Headers.Get("User-Agent"), 80),
 			Inbound: in, Note: p.rewrite.Reason, Files: len(p.rewrite.Files), Reply: reply,
+			ReplyTool: cfg.replyTool, // the switch as it was for this request; the page judges by it
 		})
 	}
 	logf(cfg, "info", "request", map[string]any{"id": p.recID(), "format": format, "model": model, "stream": req.Stream, "rewritten": p.rewrite.Rewritten, "files": len(p.rewrite.Files), "skip_reason": p.rewrite.Reason})
@@ -419,6 +435,9 @@ func (p *prepared) replied(rewritten, viaTool bool) {
 	reply := recent.ReplyPass
 	if rewritten {
 		reply = recent.ReplyPlain
+		if !p.cfg.replyTool {
+			reply = recent.ReplyText
+		}
 		if viaTool {
 			reply = recent.ReplyTool
 		}

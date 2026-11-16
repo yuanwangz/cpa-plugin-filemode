@@ -23,11 +23,11 @@ const (
 	DefaultToolName     = "submit_reply"
 	DefaultReadToolName = "read_message"
 	DefaultPlaceholder  = "[message text in the file {name}]"
-	DefaultInstruction  = "\n\nThis turn is in file mode: you must reply to the message(s) above by calling the {tool} tool (argument: content), never as plain text. Other tools stay available for the work before that; when you reply, that call must be the only tool call in that step, and its content is exactly what the user receives."
-	DefaultToolDesc     = "Submit your complete reply to the user. In file mode every reply must go through this tool, not plain text. The content is delivered to them verbatim as your answer (Markdown allowed). Call it alone, as the only tool call in that step."
-	contentArgDesc     = "The complete reply, exactly as the user should receive it."
-	DefaultReadDesc    = "Read the text of the new message(s) of this turn. With no argument it returns every file of the turn."
-	fileArgDesc        = "Optional file name, e.g. msg-1.md; omit to read them all."
+	DefaultInstruction  = "\n\nFile mode: when you write your final answer for this step, pass it to the {tool} tool (argument: content) instead of plain text, as the only tool call in that step. Use other tools as usual until then."
+	DefaultToolDesc     = "Write your final answer for this step (Markdown allowed). Use it instead of plain text, as the only tool call in that step."
+	contentArgDesc      = "The final answer, as plain text or Markdown."
+	DefaultReadDesc     = "Read the text of the new message(s) of this turn. With no argument it returns every file of the turn."
+	fileArgDesc         = "Optional file name, e.g. msg-1.md; omit to read them all."
 )
 
 // Options controls one rewrite.
@@ -38,6 +38,7 @@ type Options struct {
 	ToolDesc    string
 	ReadTool    string // the read tool; its call and result are added after the turn
 	ReadDesc    string
+	NoReply     bool // reply tool off: neither the reply tool nor the instruction is injected; the model answers in plain text
 }
 
 // DefaultOptions returns the options used by the plugin unless configured.
@@ -73,6 +74,9 @@ func (o Options) placeholder(name string) string {
 }
 
 func (o Options) instruction() string {
+	if o.NoReply {
+		return ""
+	}
 	return strings.ReplaceAll(o.Instruction, "{tool}", o.ToolName)
 }
 
@@ -80,6 +84,14 @@ func (o Options) instruction() string {
 // supported upstream (OpenAI, Anthropic and Gemini share this subset).
 func ValidToolName(name string) bool {
 	return toolNameRe.MatchString(name)
+}
+
+// ownTools are the tool names the plugin declares on a request.
+func (o Options) ownTools() []string {
+	if o.NoReply {
+		return []string{o.ReadTool}
+	}
+	return []string{o.ToolName, o.ReadTool}
 }
 
 var toolNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]{0,63}$`)

@@ -483,3 +483,51 @@ func TestToolChoiceNoneKeepsToolTable(t *testing.T) {
 		}
 	}
 }
+
+func TestNoReplyInjectsOnlyTheReadTool(t *testing.T) {
+	o := DefaultOptions()
+	o.NoReply = true
+	cases := []struct {
+		format, body, msgs, toolName string
+	}{
+		{FormatClaude, `{"messages":[{"role":"user","content":"hello"}],"tools":[{"name":"Read","input_schema":{}}]}`, "messages", "name"},
+		{FormatChat, `{"messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"shell"}}]}`, "messages", "function.name"},
+		{FormatResponses, `{"input":[{"type":"message","role":"user","content":"hello"}],"tools":[{"type":"function","name":"shell"}]}`, "input", "name"},
+	}
+	for _, c := range cases {
+		r := Rewrite(c.format, []byte(c.body), o)
+		if !r.Rewritten || len(r.Files) != 1 || r.Files[0].Text != "hello" {
+			t.Fatalf("%s: %+v", c.format, r)
+		}
+		tools := gjson.GetBytes(r.Body, "tools").Array()
+		if len(tools) != 2 || tools[1].Get(c.toolName).String() != o.ReadTool {
+			t.Fatalf("%s: tools %s", c.format, gjson.GetBytes(r.Body, "tools").Raw)
+		}
+		msgs := gjson.GetBytes(r.Body, c.msgs).Raw
+		if strings.Contains(msgs, o.ToolName) || strings.Contains(msgs, "File mode") || !strings.Contains(msgs, o.ReadTool) {
+			t.Fatalf("%s: messages %s", c.format, msgs)
+		}
+		// tool_choice none keeps the same table
+		none := strings.Replace(c.body, `}]}`, `}],"tool_choice":"none"}`, 1)
+		if c.format == FormatClaude {
+			none = strings.Replace(c.body, `}]}`, `}],"tool_choice":{"type":"none"}}`, 1)
+		}
+		n := Rewrite(c.format, []byte(none), o)
+		if !n.ToolsOnly || gjson.GetBytes(n.Body, "tools").Raw != gjson.GetBytes(r.Body, "tools").Raw {
+			t.Fatalf("%s: tools only %s", c.format, n.Body)
+		}
+	}
+	// a client tool that shares the reply tool's name no longer blocks the rewrite
+	body := `{"messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"submit_reply"}}]}`
+	if r := Rewrite(FormatChat, []byte(body), o); !r.Rewritten {
+		t.Fatalf("client submit_reply blocked: %+v", r)
+	}
+}
+
+func TestRestoreLeavesClientToolWhenReplyOff(t *testing.T) {
+	body := `{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"submit_reply","arguments":"{\"content\":\"x\"}"}}]}}]}`
+	out, changed := Restore(FormatChat, []byte(body), Tools{Read: DefaultReadToolName})
+	if changed || string(out) != body {
+		t.Fatalf("changed: %s", out)
+	}
+}
