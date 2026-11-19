@@ -531,3 +531,47 @@ func TestRestoreLeavesClientToolWhenReplyOff(t *testing.T) {
 		t.Fatalf("changed: %s", out)
 	}
 }
+
+// A user message that arrives in the middle of a tool loop (an event the client
+// adds between steps) stays as it is: the turn and the read call after it keep
+// the same bytes, so the earlier steps' prefix is still a prefix.
+func TestRewriteLateUserMessageKeepsTurn(t *testing.T) {
+	step1 := `{"input":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old answer"}]},{"role":"user","content":"do it"},{"type":"function_call","call_id":"c1","name":"shell","arguments":"{}"},{"type":"function_call_output","call_id":"c1","output":"ok"}]}`
+	step2 := `{"input":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old answer"}]},{"role":"user","content":"do it"},{"type":"function_call","call_id":"c1","name":"shell","arguments":"{}"},{"type":"function_call_output","call_id":"c1","output":"ok"},{"role":"user","content":"event: build finished"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"checking"}]},{"type":"function_call","call_id":"c2","name":"shell","arguments":"{}"},{"type":"function_call_output","call_id":"c2","output":"ok2"}]}`
+	r1 := Rewrite(FormatResponses, []byte(step1), DefaultOptions())
+	r2 := Rewrite(FormatResponses, []byte(step2), DefaultOptions())
+	if !r2.Rewritten || len(r2.Files) != 1 || r2.Files[0].Text != "do it" {
+		t.Fatalf("%+v", r2)
+	}
+	a := gjson.GetBytes(r1.Body, "input").Raw
+	b := gjson.GetBytes(r2.Body, "input").Raw
+	if !strings.HasPrefix(b, strings.TrimSuffix(a, "]")) {
+		t.Fatalf("step 2 does not extend step 1:\n%s\n%s", a, b)
+	}
+	if !strings.Contains(b, `"content":"event: build finished"`) {
+		t.Fatal("late user message must stay as text")
+	}
+}
+
+func TestRewriteChatLateUserMessageKeepsTurn(t *testing.T) {
+	body := `{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"hello"},{"role":"user","content":"do it"},{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"shell","arguments":"{}"}}]},{"role":"tool","tool_call_id":"c1","content":"ok"},{"role":"user","content":"note"}]}`
+	r := Rewrite(FormatChat, []byte(body), DefaultOptions())
+	if !r.Rewritten || len(r.Files) != 1 || r.Files[0].Text != "do it" {
+		t.Fatalf("%+v", r)
+	}
+	m := gjson.GetBytes(r.Body, "messages").Array()
+	if m[0].Get("content").String() != "hi" || m[len(m)-1].Get("content").String() != "note" || m[3].Get("tool_calls.0.id").String() != "call_filemode_read_1" {
+		t.Fatalf("%s", r.Body)
+	}
+}
+
+func TestRewriteClaudeLateUserMessageKeepsTurn(t *testing.T) {
+	body := `{"messages":[{"role":"user","content":"do it"},{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"shell","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":"ok"},{"type":"text","text":"note"}]}]}`
+	r := Rewrite(FormatClaude, []byte(body), DefaultOptions())
+	if !r.Rewritten || len(r.Files) != 1 || r.Files[0].Text != "do it" {
+		t.Fatalf("%+v", r)
+	}
+	if !strings.Contains(string(r.Body), `"text":"note"`) {
+		t.Fatalf("%s", r.Body)
+	}
+}

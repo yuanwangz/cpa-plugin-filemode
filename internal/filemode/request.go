@@ -119,11 +119,37 @@ func mustJSON(v any) string {
 
 func fileName(n int) string { return fmt.Sprintf("msg-%d.md", n) }
 
-// turn finds the new user turn: the last user message k, and the user messages
-// before it back to the previous non-user, non-system item. isUser and
-// isSkippable classify items; the returned indices are ascending.
-func turn(items []gjson.Result, isUser, isSkippable func(gjson.Result) bool) []int {
+// turn finds the new user turn: the first run of user messages after the last
+// reply (an item isReply marks), together with the skippable items inside the
+// run. User messages that arrive later in the same tool loop (events, notes
+// the client adds between steps) stay as they are, so the rewrite of the turn
+// and the read call after it are the same on every step and the prefix cache
+// holds. With no user message after the last reply it falls back to the last
+// user message and the users right before it. The returned indices are ascending.
+func turn(items []gjson.Result, isUser, isSkippable func(gjson.Result) bool, isReply func(i int) bool) []int {
+	from := 0
+	for i := len(items) - 1; i >= 0; i-- {
+		if isReply(i) {
+			from = i + 1
+			break
+		}
+	}
 	k := -1
+	for i := from; i < len(items); i++ {
+		if isUser(items[i]) {
+			k = i
+			break
+		}
+	}
+	if k >= 0 {
+		var idx []int
+		for i := k; i < len(items) && (isUser(items[i]) || isSkippable(items[i])); i++ {
+			if isUser(items[i]) {
+				idx = append(idx, i)
+			}
+		}
+		return idx
+	}
 	for i := len(items) - 1; i >= 0; i-- {
 		if isUser(items[i]) {
 			k = i
@@ -315,7 +341,17 @@ func rewriteResponses(body []byte, o Options) RewriteResult {
 		r := it.Get("role").String()
 		return (t == "" || t == "message") && (r == "system" || r == "developer")
 	}
-	idx := turn(items, isUser, isSys)
+	// a reply is an assistant message not followed by a tool call of the same
+	// response (text the model wrote alongside its calls is a step of the loop)
+	isReply := func(i int) bool {
+		it := items[i]
+		t := it.Get("type").String()
+		if !((t == "" || t == "message") && it.Get("role").String() == "assistant") {
+			return false
+		}
+		return i+1 >= len(items) || items[i+1].Get("type").String() != "function_call"
+	}
+	idx := turn(items, isUser, isSys, isReply)
 	if len(idx) == 0 {
 		return RewriteResult{Body: body, Reason: "no user message"}
 	}
@@ -367,7 +403,12 @@ func rewriteChat(body []byte, o Options) RewriteResult {
 		r := m.Get("role").String()
 		return r == "system" || r == "developer"
 	}
-	idx := turn(items, isUser, isSys)
+	// a reply is an assistant message without tool calls
+	isReply := func(i int) bool {
+		m := items[i]
+		return m.Get("role").String() == "assistant" && len(m.Get("tool_calls").Array()) == 0
+	}
+	idx := turn(items, isUser, isSys, isReply)
 	if len(idx) == 0 {
 		return RewriteResult{Body: body, Reason: "no user message"}
 	}
@@ -438,7 +479,23 @@ func rewriteClaude(body []byte, o Options) RewriteResult {
 		return human
 	}
 	isSys := func(gjson.Result) bool { return false }
-	idx := turn(items, isUser, isSys)
+	// a reply is an assistant message without tool_use blocks
+	isReply := func(i int) bool {
+		m := items[i]
+		if m.Get("role").String() != "assistant" {
+			return false
+		}
+		use := false
+		m.Get("content").ForEach(func(_, b gjson.Result) bool {
+			if b.Get("type").String() == "tool_use" {
+				use = true
+				return false
+			}
+			return true
+		})
+		return !use
+	}
+	idx := turn(items, isUser, isSys, isReply)
 	if len(idx) == 0 {
 		return RewriteResult{Body: body, Reason: "no user message"}
 	}

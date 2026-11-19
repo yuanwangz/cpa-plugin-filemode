@@ -6,7 +6,7 @@ CLIProxyAPI（CPA，[router-for-me/CLIProxyAPI](https://github.com/router-for-me
 
 客户端请求的模型名带前缀（默认 `file-`）时生效，例如 `file-gpt-5.5` 实际按 `gpt-5.5` 路由和执行：
 
-- **请求侧**：本轮新消息（最后一条 assistant 之后的 user 消息；工具循环中间步骤沿用同一轮）的文字正文各记作一个文件 `msg-N.md`，正文位置只留一行占位 `[message text in the file msg-N.md]`；图片等非文字部件原样保留；历史消息不动。紧跟这一轮之后，插件补上一步「模型已调用 `read_message`」和它的返回（这一轮全部文件的正文，多个文件用 `<file name="msg-N.md">…</file>` 分隔），上游看到的就像模型已经读过一遍，不多花一次请求。同时注入两个插件自己的工具：`submit_reply`（参数 `{content: string}`）和 `read_message`（可选参数 `{file}`；历史里有这个调用，就必须声明它，否则 Claude 等接口会报错），并在最后一条新消息后追加一句英文说明：用 `submit_reply` 提交完整回复，而且它必须是那一步唯一的调用。补的调用 id 固定（`call_filemode_read_1`），工具循环每一步改写结果一致，前缀缓存不受影响。
+- **请求侧**：本轮新消息（最后一条回复之后的第一段连续 user 消息；回复指不带工具调用的 assistant 消息，工具循环中间步骤沿用同一轮；循环中途才进来的 user 消息，比如客户端在两步之间插的事件或通知，保持原文不改写）的文字正文各记作一个文件 `msg-N.md`，正文位置只留一行占位 `[message text in the file msg-N.md]`；图片等非文字部件原样保留；历史消息不动。紧跟这一轮之后，插件补上一步「模型已调用 `read_message`」和它的返回（这一轮全部文件的正文，多个文件用 `<file name="msg-N.md">…</file>` 分隔），上游看到的就像模型已经读过一遍，不多花一次请求。同时注入两个插件自己的工具：`submit_reply`（参数 `{content: string}`）和 `read_message`（可选参数 `{file}`；历史里有这个调用，就必须声明它，否则 Claude 等接口会报错），并在最后一条新消息后追加一句英文说明：用 `submit_reply` 提交完整回复，而且它必须是那一步唯一的调用。补的调用 id 固定（`call_filemode_read_1`），工具循环每一步改写结果一致，前缀缓存不受影响。
 - **模型自己再调 `read_message`**：插件内部答掉，客户端看不到。非流式：回应里只有这个调用（没有文字、没有别的调用）时，把调用和返回接在请求末尾再发一次。流式：插件先压住开头的输出，直到看出模型第一件事是文字/别的调用（照常放行）还是 `read_message`（丢掉这次流，答掉后重发）；推理/思考块不算，最多压 64 个分块。每个请求最多重发 `max_reads` 次（默认 2）；之后，或调用夹在别的输出里时，这个调用直接去掉。
 - **响应侧**：模型调用了 `submit_reply` 时，这次调用改写成客户端格式里普通的 assistant 文字，客户端看不到这两个工具（Responses 响应里回显的 `tools` 列表也会去掉它们）。和别的工具调用混在同一步时，`submit_reply` 转成文字，其它调用照常保留。模型直接回文字时照常放行。非流式和流式都处理。
 - **被拒回退**：上游以 400/413/415/422 拒收改写后的请求时，用原始请求（只去掉前缀）重发一次。流式请求在首字节前判断，所以也能回退。
@@ -23,7 +23,7 @@ CLIProxyAPI（CPA，[router-for-me/CLIProxyAPI](https://github.com/router-for-me
 
 正文走的是工具调用和工具返回，CPA 内置翻译器对每种上游都会转（OpenAI 兼容的 `tool` 消息、Codex 的 `function_call_output`、Claude 的 `tool_result`、Gemini 的 `functionResponse`），所以不再需要翻译后的附件修补（旧版的 `request_normalizer` 和 Claude→Codex 退回内联都去掉了）。
 
-前缀缓存：只改写最新一轮，注入的两个工具每次都按同样字节追加在工具表末尾，补的读调用 id 固定（`call_filemode_read_1`），所以同一轮工具循环的各步前缀一致。`tool_choice: none` 的请求不改写消息，但照样补上这两个工具，让工具表（前缀最前面）和平时一致，不会整条重算。进入新一轮时，上一轮从「文件 + 读取」变回原文，缓存从上一轮的用户消息起断开，这是只改写最新一轮的代价。
+前缀缓存：只改写最新一轮，注入的两个工具每次都按同样字节追加在工具表末尾，补的读调用 id 固定（`call_filemode_read_1`），本轮的起点钉在最后一条回复之后，循环中途进来的 user 消息不会把本轮挪走，所以同一轮工具循环的各步前缀一致。`tool_choice: none` 的请求不改写消息，但照样补上这两个工具，让工具表（前缀最前面）和平时一致，不会整条重算。进入新一轮时，上一轮从「文件 + 读取」变回原文，缓存从上一轮的用户消息起断开，这是只改写最新一轮的代价。
 
 为什么不用 `request_interceptor` / `response_interceptor` / `response_stream_interceptor`：
 

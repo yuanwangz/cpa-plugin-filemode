@@ -17,7 +17,7 @@ import (
 )
 
 // pluginVersion is overridden at release build time: -ldflags "-X main.pluginVersion=<ver>".
-var pluginVersion = "0.5.0"
+var pluginVersion = "0.5.1"
 
 const (
 	pluginName     = "filemode"
