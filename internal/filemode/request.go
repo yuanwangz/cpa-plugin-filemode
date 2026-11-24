@@ -276,6 +276,46 @@ func openToolChoice(format string, body []byte, o Options, none bool) ([]byte, e
 	return sjson.SetBytes(body, "tool_choice", "auto")
 }
 
+// ForceAnswer sets tool_choice on the last send of a request whose reads are
+// used up, so the model answers instead of asking to read again. Messages and
+// the tool table stay byte-identical (the prefix cache holds); only tool_choice
+// changes. With the reply tool on the model is forced to call it; with it off,
+// or on Claude with extended thinking (which allows only auto and none), tool
+// calls are turned off (none) and the model answers in plain text.
+func ForceAnswer(format string, body []byte, o Options) []byte {
+	root := gjson.ParseBytes(body)
+	thinking := false
+	if format == FormatClaude {
+		t := root.Get("thinking.type").String()
+		thinking = t != "" && t != "disabled"
+	}
+	var out []byte
+	var err error
+	switch {
+	case format == FormatClaude:
+		tc := map[string]any{"type": "none"}
+		if !o.NoReply && !thinking {
+			tc = map[string]any{"type": "tool", "name": o.ToolName}
+			if d := root.Get("tool_choice.disable_parallel_tool_use"); d.Exists() {
+				tc["disable_parallel_tool_use"] = d.Bool()
+			}
+		}
+		out, err = sjson.SetBytes(body, "tool_choice", tc)
+	case o.NoReply && (format == FormatChat || format == FormatResponses):
+		out, err = sjson.SetBytes(body, "tool_choice", "none")
+	case format == FormatChat:
+		out, err = sjson.SetBytes(body, "tool_choice", map[string]any{"type": "function", "function": map[string]any{"name": o.ToolName}})
+	case format == FormatResponses:
+		out, err = sjson.SetBytes(body, "tool_choice", map[string]any{"type": "function", "name": o.ToolName})
+	default:
+		return body
+	}
+	if err != nil {
+		return body
+	}
+	return out
+}
+
 // clientUsesTool reports whether the client declared a tool of that name.
 func clientUsesTool(root gjson.Result, names ...string) bool {
 	for _, t := range root.Get("tools").Array() {

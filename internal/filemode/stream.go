@@ -17,12 +17,17 @@ type StreamRestorer interface {
 	// Replied reports whether the stream carried a reply-tool call that was
 	// turned back into text (for the plugin's recent-request records).
 	Replied() bool
+	// ReadDropped reports whether a read-tool call was dropped from the stream
+	// (the model still wanted to read once the plugin stopped answering).
+	ReadDropped() bool
 }
 
-// replied is embedded by the restorers to remember a reply-tool call.
-type replied struct{ seen bool }
+// replied is embedded by the restorers to remember a reply-tool call and a
+// dropped read-tool call.
+type replied struct{ seen, read bool }
 
-func (r *replied) Replied() bool { return r.seen }
+func (r *replied) Replied() bool     { return r.seen }
+func (r *replied) ReadDropped() bool { return r.read }
 
 // NewStreamRestorer returns a restorer for the format, or a pass-through one.
 func NewStreamRestorer(format string, tool Tools) StreamRestorer {
@@ -42,6 +47,7 @@ type passStream struct{}
 func (passStream) Process(c []byte) [][]byte { return [][]byte{c} }
 func (passStream) Finish() [][]byte          { return nil }
 func (passStream) Replied() bool             { return false }
+func (passStream) ReadDropped() bool         { return false }
 
 // framer carries the per-stream framing state shared by the restorers.
 type framer struct {
@@ -199,6 +205,7 @@ func (s *chatStream) frame(f frame) ([]frame, bool) {
 						cl.suppressed = true
 						cl.silent = n == s.tool.Read
 						s.seen = s.seen || !cl.silent
+						s.read = s.read || cl.silent
 					} else {
 						cl.client = c.next
 						c.next++
@@ -364,6 +371,7 @@ func (s *responsesStream) frame(f frame) ([]frame, bool) {
 			c := &respCall{outIndex: ev.Get("output_index").Int(), itemID: it.Get("id").String(), callID: it.Get("call_id").String(), silent: it.Get("name").String() == s.tool.Read}
 			s.calls[c.outIndex] = c
 			s.seen = s.seen || !c.silent
+			s.read = s.read || c.silent
 			if c.itemID != "" {
 				s.byItem[c.itemID] = c
 			}
@@ -517,6 +525,7 @@ func (s *claudeStream) frame(f frame) ([]frame, bool) {
 			if n := cb.Get("name").String(); s.tool.has(n) {
 				s.blocks[ev.Get("index").Int()] = &claudeBlock{silent: n == s.tool.Read}
 				s.seen = s.seen || n != s.tool.Read
+				s.read = s.read || n == s.tool.Read
 				return nil, true
 			}
 			s.other = true

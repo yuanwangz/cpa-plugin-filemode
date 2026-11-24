@@ -13,6 +13,9 @@ Behaviour is chosen by the model name suffix:
   *-reread  call read_message itself while the request holds only one read result, then reply
   *-text    answer with plain text
   *-reject  HTTP 400 when the request carries a read_message result, else plain text
+  *-readloop  keep calling read_message until tool_choice forces submit_reply (then reply) or
+              turns tools off (then plain text)
+  *-readstuck call read_message on every request whatever tool_choice says
 
 Every request is appended to $MOCK_LOG as one JSON line {path, body}.
 """
@@ -103,8 +106,26 @@ def reply_text(body):
     return "INLINE-ECHO"
 
 
+def forced(body):
+    """'reply' when tool_choice forces submit_reply, 'none' when it turns tools off, else ''.
+    Covers OpenAI Chat / Responses, Claude and Gemini toolConfig as the host sends them."""
+    tc = body.get("tool_choice")
+    if tc == "none" or (isinstance(tc, dict) and tc.get("type") == "none"):
+        return "none"
+    if isinstance(tc, dict) and TOOL in json.dumps(tc):
+        return "reply"
+    fc = (body.get("toolConfig") or body.get("tool_config") or {})
+    fc = fc.get("functionCallingConfig") or fc.get("function_calling_config") or {}
+    mode = str(fc.get("mode", "")).upper()
+    if mode == "NONE":
+        return "none"
+    if mode == "ANY" and TOOL in json.dumps(fc):
+        return "reply"
+    return ""
+
+
 def scenario(model):
-    for s in ("reply", "mixed", "reread", "text", "reject"):
+    for s in ("reply", "mixed", "reread", "text", "reject", "readloop", "readstuck"):
         if model.endswith("-" + s):
             return s
     return "text"
@@ -179,6 +200,15 @@ class H(BaseHTTPRequestHandler):
             if len(read_results(body)) < 2:
                 return [("call", READ, {})]
             return [("call", TOOL, {"content": reply_text(body)})]
+        if sc == "readstuck" and has_tool(body):
+            return [("call", READ, {})]
+        if sc == "readloop" and has_tool(body):
+            f = forced(body)
+            if f == "reply":
+                return [("call", TOOL, {"content": reply_text(body)})]
+            if f == "none":
+                return [("text", None, "ECHO:" + (read_results(body) or [""])[-1])]
+            return [("call", READ, {})]
         if sc == "mixed" and has_tool(body):
             return [("call", "list_dir", {"path": "."}), ("call", TOOL, {"content": reply_text(body)})]
         return [("text", None, "plain text answer")]
@@ -270,7 +300,7 @@ class H(BaseHTTPRequestHandler):
         mid = "msg_" + uuid.uuid4().hex[:8]
         blocks = []
         for i, (k, name, p) in enumerate(plan):
-            blocks.append({"type": "text", "text": p} if k == "text" else {"type": "tool_use", "id": "toolu_%d" % i, "name": name, "input": p})
+            blocks.append({"type": "text", "text": p} if k == "text" else {"type": "tool_use", "id": "toolu_%d_%s" % (i, uuid.uuid4().hex[:6]), "name": name, "input": p})
         stop = "tool_use" if any(b["type"] == "tool_use" for b in blocks) else "end_turn"
         if not body.get("stream"):
             return self.send_json(200, {"id": mid, "type": "message", "role": "assistant", "model": model, "content": blocks,

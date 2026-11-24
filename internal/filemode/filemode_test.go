@@ -1,6 +1,8 @@
 package filemode
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -585,5 +587,35 @@ func TestRewriteClaudeLateUserMessageKeepsTurn(t *testing.T) {
 	}
 	if !strings.Contains(string(r.Body), `"text":"note"`) {
 		t.Fatalf("%s", r.Body)
+	}
+}
+
+func TestForceAnswer(t *testing.T) {
+	on, off := DefaultOptions(), DefaultOptions()
+	off.NoReply = true
+	cases := []struct {
+		format, body string
+		o            Options
+		want         string
+	}{
+		{FormatChat, `{"tool_choice":"auto"}`, on, `{"type":"function","function":{"name":"` + DefaultToolName + `"}}`},
+		{FormatChat, `{}`, off, `"none"`},
+		{FormatResponses, `{}`, on, `{"type":"function","name":"` + DefaultToolName + `"}`},
+		{FormatResponses, `{"tool_choice":"none"}`, off, `"none"`},
+		{FormatClaude, `{"tool_choice":{"type":"auto","disable_parallel_tool_use":true}}`, on, `{"type":"tool","name":"` + DefaultToolName + `","disable_parallel_tool_use":true}`},
+		{FormatClaude, `{"thinking":{"type":"enabled","budget_tokens":1024}}`, on, `{"type":"none"}`},
+		{FormatClaude, `{}`, off, `{"type":"none"}`},
+	}
+	for i, c := range cases {
+		got := gjson.GetBytes(ForceAnswer(c.format, []byte(c.body), c.o), "tool_choice")
+		var g, w any
+		_ = json.Unmarshal([]byte(got.Raw), &g)
+		_ = json.Unmarshal([]byte(c.want), &w)
+		if !reflect.DeepEqual(g, w) {
+			t.Errorf("case %d: tool_choice %s, want %s", i, got.Raw, c.want)
+		}
+	}
+	if HasCall(FormatChat, []byte(`{"choices":[{"message":{"tool_calls":[{"function":{"name":"read_message"}}]}}]}`), DefaultToolName) {
+		t.Error("HasCall matched the read tool as the reply tool")
 	}
 }

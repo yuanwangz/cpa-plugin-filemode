@@ -21,12 +21,13 @@ const (
 
 // Reply outcomes.
 const (
-	ReplyPending = "pending" // stream still running
-	ReplyTool    = "tool"    // the model answered through the reply tool, turned back into text
-	ReplyPlain   = "plain"   // the model answered in plain text without the reply tool
-	ReplyText    = "text"    // plain text answer with the reply tool turned off (reply_tool: false)
-	ReplyPass    = "pass"    // request was not rewritten, response passed through
-	ReplyError   = "error"   // upstream or stream error (Error says what)
+	ReplyPending  = "pending"   // stream still running
+	ReplyTool     = "tool"      // the model answered through the reply tool, turned back into text
+	ReplyPlain    = "plain"     // the model answered in plain text without the reply tool
+	ReplyText     = "text"      // plain text answer with the reply tool turned off (reply_tool: false)
+	ReplyReadLeft = "read_left" // reads used up and the model still only asked to read: that call was dropped, the client got no answer
+	ReplyPass     = "pass"      // request was not rewritten, response passed through
+	ReplyError    = "error"     // upstream or stream error (Error says what)
 )
 
 // Record is one file-mode request.
@@ -41,6 +42,7 @@ type Record struct {
 	Note           string    `json:"note,omitempty"` // skip reason or why the upstream rejected
 	Files          int       `json:"files"`
 	Reads          int       `json:"reads"`                      // read-tool calls the plugin answered itself
+	Forced         bool      `json:"forced,omitempty"`           // reads used up: the last send set tool_choice so the model answers
 	ReplyTool      bool      `json:"reply_tool"`                 // reply_tool switch when this request came in
 	ToolChoiceNone bool      `json:"tool_choice_none,omitempty"` // client sent tool_choice none (sent up as auto when the reply tool is on)
 	Reply          string    `json:"reply"`

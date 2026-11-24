@@ -25,6 +25,8 @@ api-keys:
         - {name: "oa-reread", alias: "oa-reread"}
         - {name: "oa-text", alias: "oa-text"}
         - {name: "oa-reject", alias: "oa-reject"}
+        - {name: "oa-readloop", alias: "oa-readloop"}
+        - {name: "oa-readstuck", alias: "oa-readstuck"}
   claude:
     - name: "mockcl"
       base-url: "http://127.0.0.1:__MOCK_PORT__"
@@ -36,6 +38,8 @@ api-keys:
         - {name: "cl-reread", alias: "cl-reread"}
         - {name: "cl-text", alias: "cl-text"}
         - {name: "cl-reject", alias: "cl-reject"}
+        - {name: "cl-readloop", alias: "cl-readloop"}
+        - {name: "cl-readstuck", alias: "cl-readstuck"}
   codex:
     - name: "mockcx"
       base-url: "http://127.0.0.1:__MOCK_PORT__/codex"
@@ -47,6 +51,8 @@ api-keys:
         - {name: "cx-reread", alias: "cx-reread"}
         - {name: "cx-text", alias: "cx-text"}
         - {name: "cx-reject", alias: "cx-reject"}
+        - {name: "cx-readloop", alias: "cx-readloop"}
+        - {name: "cx-readstuck", alias: "cx-readstuck"}
   gemini:
     - name: "mockgm"
       base-url: "http://127.0.0.1:__MOCK_PORT__"
@@ -58,6 +64,8 @@ api-keys:
         - {name: "gm-reread", alias: "gm-reread"}
         - {name: "gm-text", alias: "gm-text"}
         - {name: "gm-reject", alias: "gm-reject"}
+        - {name: "gm-readloop", alias: "gm-readloop"}
+        - {name: "gm-readstuck", alias: "gm-readstuck"}
 plugins:
   enabled: true
   dir: "__DIR__/plugins"

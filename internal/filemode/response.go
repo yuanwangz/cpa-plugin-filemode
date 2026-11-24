@@ -127,12 +127,20 @@ func restoreResponseObject(obj string, tool Tools) (string, bool) {
 	return res, true
 }
 
-// stripTool removes the reply tool from a Responses object's echoed "tools"
-// list, so the client does not see a tool it never declared.
+// stripTool removes the plugin tools from a Responses object's echoed "tools"
+// list, and an echoed tool_choice that names one (the forced last send once
+// reads are used up) goes back to auto, so the client does not see a tool it
+// never declared.
 func stripTool(obj string, tool Tools) (string, bool) {
+	changed := false
+	if tc := gjson.Get(obj, "tool_choice"); tc.IsObject() && (tool.has(tc.Get("name").String()) || tool.has(tc.Get("function.name").String())) {
+		if out, err := sjson.Set(obj, "tool_choice", "auto"); err == nil {
+			obj, changed = out, true
+		}
+	}
 	tools := gjson.Get(obj, "tools")
 	if !tools.IsArray() {
-		return obj, false
+		return obj, changed
 	}
 	var keep []string
 	removed := false
@@ -144,11 +152,11 @@ func stripTool(obj string, tool Tools) (string, bool) {
 		keep = append(keep, t.Raw)
 	}
 	if !removed {
-		return obj, false
+		return obj, changed
 	}
 	out, err := sjson.SetRaw(obj, "tools", joinArray(keep))
 	if err != nil {
-		return obj, false
+		return obj, changed
 	}
 	return out, true
 }
@@ -311,4 +319,34 @@ func ReadCalls(format string, body []byte, read string) []Call {
 		}
 	}
 	return calls
+}
+
+// HasCall reports whether a non-stream response carries a tool call named name.
+func HasCall(format string, body []byte, name string) bool {
+	if name == "" || !gjson.ValidBytes(body) {
+		return false
+	}
+	switch format {
+	case FormatResponses:
+		for _, it := range gjson.GetBytes(body, "output").Array() {
+			if it.Get("type").String() == "function_call" && it.Get("name").String() == name {
+				return true
+			}
+		}
+	case FormatChat:
+		for _, ch := range gjson.GetBytes(body, "choices").Array() {
+			for _, c := range ch.Get("message.tool_calls").Array() {
+				if c.Get("function.name").String() == name {
+					return true
+				}
+			}
+		}
+	case FormatClaude:
+		for _, b := range gjson.GetBytes(body, "content").Array() {
+			if b.Get("type").String() == "tool_use" && b.Get("name").String() == name {
+				return true
+			}
+		}
+	}
+	return false
 }

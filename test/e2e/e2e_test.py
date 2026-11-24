@@ -250,6 +250,28 @@ def test_reread(fmt, up, stream):
     check("[reread %s] client gets only the reply" % tag, st == 200 and text == "ECHO:" + TXT and not tools and "read_message" not in raw and TOOL not in raw, (st, text, tools, raw[:2000]))
 
 
+def test_readloop(fmt, up, stream):
+    """Reads used up: the last send keeps messages and tools, only tool_choice forces the reply tool."""
+    n = mark()
+    path, body = body_for(fmt, "file-%s-readloop" % up, TXT, stream)
+    st, raw = post(path, body, stream)
+    ups = upstream_since(n)
+    text, tools, _ = parse(fmt, raw, stream) if st == 200 else ("", [], None)
+    tag = "%s->%s %s" % (fmt, up, "stream" if stream else "non-stream")
+    tc = [json.dumps(u["body"].get("tool_choice") or u["body"].get("toolConfig") or u["body"].get("tool_config")) for u in ups]
+    check("[readloop %s] three upstream requests, only the last forces submit_reply" % tag,
+          len(ups) == 3 and TOOL not in tc[0] and TOOL not in tc[1] and TOOL in tc[2], tc)
+    def strip(b):
+        b = dict(b)
+        for k in ("tool_choice", "toolConfig", "tool_config"):
+            b.pop(k, None)
+        return b
+    if len(ups) == 3:
+        t1, t2 = json.dumps(strip(ups[1]["body"]).get("tools")), json.dumps(strip(ups[2]["body"]).get("tools"))
+        check("[readloop %s] forced send has the same tool table" % tag, t1 == t2, (t1[:300], t2[:300]))
+    check("[readloop %s] client gets the reply" % tag, st == 200 and text == "ECHO:" + TXT and not tools and "read_message" not in raw and TOOL not in raw, (st, text, tools, raw[:2000]))
+
+
 def test_text(fmt, up, stream):
     path, body = body_for(fmt, "file-%s-text" % up, TXT, stream)
     st, raw = post(path, body, stream)
@@ -365,6 +387,10 @@ def test_recent():
         ("claude", "file-cl-text", False, "rewritten", "plain", 0),
         ("chat", "file-oa-reread", True, "rewritten", "tool", 1),
         ("responses", "file-oa-reject", False, "fallback", "pass", 0),
+        ("chat", "file-oa-readloop", False, "rewritten", "tool", 2),
+        ("claude", "file-cl-readloop", True, "rewritten", "tool", 2),
+        ("chat", "file-oa-readstuck", False, "rewritten", "read_left", 2),
+        ("responses", "file-cx-readstuck", True, "rewritten", "read_left", 2),
     ]
     for fmt, model, stream, inbound, reply, reads in cases:
         path, body = body_for(fmt, model, TXT, stream)
@@ -374,13 +400,15 @@ def test_recent():
         ok = r is not None and r["inbound"] == inbound and r["reply"] == reply and r["reads"] == reads and r["stream"] == stream and r["duration_ms"] >= 0
         if ok and inbound == "rewritten":
             ok = r["files"] == 1
+        if ok and ("readloop" in model or "readstuck" in model):
+            ok = ok and r.get("forced") is True
         if ok and inbound == "fallback":
             ok = "400" in r.get("note", "")
         check("[recent] %s %s: inbound %s, reply %s, reads %d" % (model, "stream" if stream else "non-stream", inbound, reply, reads), ok, r)
     st, j = recent()
     models = [r["model"] for r in j["records"]]
     check("[recent] newest first, unprefixed requests not recorded, size %s" % j["size"],
-          models[0] == "file-oa-reject" and "oa-reply" not in models and len(models) <= j["size"] == 20, models[:6])
+          models[0] == cases[-1][1] and "oa-reply" not in models and len(models) <= j["size"] == 20, models[:6])
     check("[recent] client recorded (User-Agent)", all(r.get("client") for r in j["records"][:5]), j["records"][:1])
     check("[recent] no bodies in the records", TXT not in json.dumps(j, ensure_ascii=False), "")
     try:
@@ -409,6 +437,9 @@ def main():
             test_tool_choice_none(fmt, up, stream)
         for fmt, up in (("responses", "oa"), ("chat", "cl"), ("claude", "cx"), ("claude", "gm"), ("chat", "oa")):
             test_reread(fmt, up, stream)
+        for fmt in ("responses", "chat", "claude"):
+            for up in ("oa", "cl", "cx", "gm"):
+                test_readloop(fmt, up, stream)
         for fmt, up in (("responses", "oa"), ("chat", "oa"), ("claude", "cl"), ("responses", "gm"), ("chat", "cx")):
             test_reject(fmt, up, stream)
     test_recent()

@@ -428,19 +428,45 @@ func (p *prepared) failed(err error) {
 	history.Finish(p.rec, recent.ReplyError, status, err.Error())
 }
 
-// replied closes the record: rewritten requests report whether the reply tool was used.
-func (p *prepared) replied(rewritten, viaTool bool) {
+// replied closes the record: rewritten requests report whether the reply tool
+// was used, or whether the model still only asked to read once reads were used
+// up (that call is dropped and the client gets no answer).
+func (p *prepared) replied(rewritten, viaTool, readLeft bool) {
 	reply := recent.ReplyPass
 	if rewritten {
 		reply = recent.ReplyPlain
 		if !p.cfg.replyTool {
 			reply = recent.ReplyText
 		}
-		if viaTool {
+		switch {
+		case viaTool:
 			reply = recent.ReplyTool
+		case readLeft:
+			reply = recent.ReplyReadLeft
 		}
 	}
 	history.Finish(p.rec, reply, 0, "")
+}
+
+// forced marks the record: the last send set tool_choice so the model answers.
+func (p *prepared) forced() { history.Update(p.rec, func(r *recent.Record) { r.Forced = true }) }
+
+// forcedSend is send with tool_choice set so the model answers (reads used up).
+func (p *prepared) forcedSend(send []byte) []byte {
+	p.forced()
+	logf(p.cfg, "info", "reads used up, sending once more with tool_choice set so the model answers", map[string]any{"id": p.recID(), "format": p.format, "model": p.model})
+	return filemode.ForceAnswer(p.format, send, p.cfg.options())
+}
+
+// forcedExecute sends the last non-stream request with tool_choice set; if
+// the upstream refuses that tool_choice it goes once more without it.
+func (p *prepared) forcedExecute(send []byte) (pluginapi.HostModelExecutionResponse, error) {
+	resp, err := hostExecute(p.hostRequest(p.forcedSend(send), false))
+	if err != nil && rejected(err) {
+		logf(p.cfg, "warn", "upstream rejected the forced tool_choice, sending without it", map[string]any{"id": p.recID(), "format": p.format, "model": p.model, "error": truncate(err.Error(), 300)})
+		resp, err = hostExecute(p.hostRequest(send, false))
+	}
+	return resp, err
 }
 
 func (p *prepared) hostRequest(body []byte, stream bool) hostModelRequest {
@@ -527,6 +553,11 @@ func execute(raw []byte) []byte {
 		}
 		logf(p.cfg, "info", "model called the read tool, answered and sent again", map[string]any{"id": p.recID(), "format": p.format, "model": p.model, "calls": len(calls)})
 		p.read()
+		if n+1 >= p.cfg.maxReads {
+			// reads used up: same messages and tools, only tool_choice makes the model answer
+			resp, err = p.forcedExecute(send)
+			continue
+		}
 		resp, err = hostExecute(p.hostRequest(send, false))
 	}
 	if err != nil {
@@ -534,12 +565,16 @@ func execute(raw []byte) []byte {
 		return errorFrom(err)
 	}
 	body := resp.Body
-	restored := false
+	viaTool, readLeft := false, false
 	if rewritten {
-		body, restored = filemode.Restore(p.format, body, p.cfg.tools())
-		logf(p.cfg, "info", "response", map[string]any{"id": p.recID(), "format": p.format, "model": p.model, "restored": restored})
+		tools := p.cfg.tools()
+		viaTool = tools.Reply != "" && filemode.HasCall(p.format, body, tools.Reply)
+		readLeft = len(filemode.ReadCalls(p.format, body, p.cfg.readTool)) > 0
+		var restored bool
+		body, restored = filemode.Restore(p.format, body, tools)
+		logf(p.cfg, "info", "response", map[string]any{"id": p.recID(), "format": p.format, "model": p.model, "restored": restored, "reply_tool_call": viaTool, "read_left": readLeft})
 	}
-	p.replied(rewritten, restored)
+	p.replied(rewritten, viaTool, readLeft)
 	return okEnvelope(pluginapi.ExecutorResponse{Payload: body, Headers: cleanHeaders(resp.Headers)})
 }
 
@@ -650,7 +685,7 @@ func pump(p *prepared, rewritten bool, in string) {
 		case clientGone:
 			history.Finish(p.rec, recent.ReplyError, 0, "下游客户端已断开")
 		default:
-			p.replied(rewritten, restorer != nil && restorer.Replied())
+			p.replied(rewritten, restorer != nil && restorer.Replied(), restorer != nil && restorer.ReadDropped())
 		}
 		closeHostStream(in)
 		_, _ = callHost(pluginabi.MethodHostStreamClose, streamClose{StreamID: out, Error: errMsg})
@@ -704,7 +739,16 @@ func pump(p *prepared, rewritten bool, in string) {
 					send = filemode.AppendReadCall(p.format, send, p.cfg.options(), filemode.ReadCallID(1+reads), "{}", p.rewrite.Files)
 					logf(p.cfg, "info", "model called the read tool, answered and sent again", map[string]any{"id": p.recID(), "format": p.format, "model": p.model, "stream": true})
 					p.read()
-					resp, err := hostStream(p.hostRequest(send, true))
+					next := send
+					if reads >= p.cfg.maxReads {
+						// reads used up: same messages and tools, only tool_choice makes the model answer
+						next = p.forcedSend(send)
+					}
+					resp, err := hostStream(p.hostRequest(next, true))
+					if err != nil && reads >= p.cfg.maxReads && rejected(err) {
+						logf(p.cfg, "warn", "upstream rejected the forced tool_choice, sending without it", map[string]any{"id": p.recID(), "format": p.format, "model": p.model, "error": truncate(err.Error(), 300)})
+						resp, err = hostStream(p.hostRequest(send, true))
+					}
 					if err != nil {
 						in = ""
 						errMsg = err.Error()
