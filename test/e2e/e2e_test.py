@@ -215,7 +215,7 @@ def test_reply(fmt, up, stream):
     rec = ups[0]
     check("[%s] prefix stripped (upstream model %s)" % (tag, upstream_model(rec)), upstream_model(rec) == "%s-reply" % up, upstream_model(rec))
     check("[%s] submit_reply and read_message tools injected" % tag, TOOL in json.dumps(rec["body"]) and "read_message" in json.dumps(rec["body"]), "")
-    check("[%s] instruction appended" % tag, "by calling the submit_reply tool" in json.dumps(rec["body"]), "")
+    check("[%s] instruction appended" % tag, "pass it to the submit_reply tool" in json.dumps(rec["body"]), "")
     check("[%s] message text travels only as the read_message result" % tag, text_moved_ok(rec), (attachments(rec["body"]), json.dumps(rec["body"], ensure_ascii=False)[:1500]))
     check("[%s] no attachment parts" % tag, not any(isinstance(d, dict) and d.get("type") in ("input_file", "file", "document") for d in walk(rec["body"])), "")
     want = "ECHO:" + TXT
@@ -256,6 +256,30 @@ def test_text(fmt, up, stream):
     text, tools, _ = parse(fmt, raw, stream) if st == 200 else ("", [], None)
     check("[direct text %s->%s %s] passes through" % (fmt, up, "stream" if stream else "non-stream"),
           st == 200 and text == "plain text answer" and not tools, (st, raw[:400]))
+
+
+def test_tool_choice_none(fmt, up, stream):
+    """tool_choice none still goes in file mode: the turn travels as the read result, without the reply instruction."""
+    n = mark()
+    path, body = body_for(fmt, "file-%s-text" % up, TXT, stream)
+    if fmt == "claude":
+        body["tools"] = [{"name": "list_dir", "input_schema": {"type": "object"}}]
+        body["tool_choice"] = {"type": "none"}
+    elif fmt == "chat":
+        body["tools"] = [{"type": "function", "function": {"name": "list_dir", "parameters": {"type": "object"}}}]
+        body["tool_choice"] = "none"
+    else:
+        body["tools"] = [{"type": "function", "name": "list_dir", "parameters": {"type": "object"}}]
+        body["tool_choice"] = "none"
+    st, raw = post(path, body, stream)
+    ups = upstream_since(n)
+    text, tools, _ = parse(fmt, raw, stream) if st == 200 else ("", [], None)
+    tag = "%s->%s %s" % (fmt, up, "stream" if stream else "non-stream")
+    rec = ups[0] if ups else {"body": {}}
+    s = json.dumps(rec["body"], ensure_ascii=False)
+    check("[tool_choice none %s] turn rewritten into the read result" % tag, len(ups) == 1 and text_moved_ok(rec), s[:1500])
+    check("[tool_choice none %s] no reply instruction" % tag, "File mode" not in s, s[:1500])
+    check("[tool_choice none %s] client gets the plain answer" % tag, st == 200 and text == "plain text answer" and not tools and "read_message" not in raw, (st, raw[:400]))
 
 
 def test_reject(fmt, up, stream):
@@ -382,6 +406,7 @@ def main():
                 test_mixed(fmt, up, stream)
         for fmt, up in (("responses", "oa"), ("chat", "cl"), ("claude", "gm"), ("responses", "cx")):
             test_text(fmt, up, stream)
+            test_tool_choice_none(fmt, up, stream)
         for fmt, up in (("responses", "oa"), ("chat", "cl"), ("claude", "cx"), ("claude", "gm"), ("chat", "oa")):
             test_reread(fmt, up, stream)
         for fmt, up in (("responses", "oa"), ("chat", "oa"), ("claude", "cl"), ("responses", "gm"), ("chat", "cx")):

@@ -14,10 +14,9 @@ import (
 
 // Inbound outcomes.
 const (
-	InRewritten = "rewritten"  // the new user turn went out as files + read call
-	InSkipped   = "skipped"    // nothing to rewrite (Note says why); sent as is
-	InFallback  = "fallback"   // upstream rejected the rewritten request; original sent instead
-	InToolsOnly = "tools_only" // tool_choice none: messages untouched, tools appended to keep the prefix cache
+	InRewritten = "rewritten" // the new user turn went out as files + read call
+	InSkipped   = "skipped"   // nothing to rewrite (Note says why); sent as is
+	InFallback  = "fallback"  // upstream rejected the rewritten request; original sent instead
 )
 
 // Reply outcomes.
@@ -25,28 +24,29 @@ const (
 	ReplyPending = "pending" // stream still running
 	ReplyTool    = "tool"    // the model answered through the reply tool, turned back into text
 	ReplyPlain   = "plain"   // the model answered in plain text without the reply tool
-	ReplyText    = "text"    // plain text answer with the reply tool turned off (reply_tool: false)
+	ReplyText    = "text"    // plain text answer with the reply tool turned off (reply_tool: false) or not callable (tool_choice none)
 	ReplyPass    = "pass"    // request was not rewritten, response passed through
 	ReplyError   = "error"   // upstream or stream error (Error says what)
 )
 
 // Record is one file-mode request.
 type Record struct {
-	ID         string    `json:"id"`
-	At         time.Time `json:"at"`
-	Model      string    `json:"model"`  // as requested, with the prefix
-	Format     string    `json:"format"` // executor format
-	Stream     bool      `json:"stream"`
-	Client     string    `json:"client,omitempty"` // User-Agent, clipped
-	Inbound    string    `json:"inbound"`
-	Note       string    `json:"note,omitempty"` // skip reason or why the upstream rejected
-	Files      int       `json:"files"`
-	Reads      int       `json:"reads"`      // read-tool calls the plugin answered itself
-	ReplyTool  bool      `json:"reply_tool"` // reply_tool switch when this request came in
-	Reply      string    `json:"reply"`
-	Status     int       `json:"status,omitempty"` // upstream HTTP status on error
-	Error      string    `json:"error,omitempty"`
-	DurationMs int64     `json:"duration_ms"`
+	ID             string    `json:"id"`
+	At             time.Time `json:"at"`
+	Model          string    `json:"model"`  // as requested, with the prefix
+	Format         string    `json:"format"` // executor format
+	Stream         bool      `json:"stream"`
+	Client         string    `json:"client,omitempty"` // User-Agent, clipped
+	Inbound        string    `json:"inbound"`
+	Note           string    `json:"note,omitempty"` // skip reason or why the upstream rejected
+	Files          int       `json:"files"`
+	Reads          int       `json:"reads"`                      // read-tool calls the plugin answered itself
+	ReplyTool      bool      `json:"reply_tool"`                 // reply tool usable on this request: the switch on and tool_choice not none
+	ToolChoiceNone bool      `json:"tool_choice_none,omitempty"` // client sent tool_choice none: rewritten without the reply instruction
+	Reply          string    `json:"reply"`
+	Status         int       `json:"status,omitempty"` // upstream HTTP status on error
+	Error          string    `json:"error,omitempty"`
+	DurationMs     int64     `json:"duration_ms"`
 }
 
 // Ring is a fixed-size, concurrency-safe list of the newest records.

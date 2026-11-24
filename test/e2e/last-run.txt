@@ -221,9 +221,21 @@ PASS [mixed claude->cl non-stream] other tool call kept, submit_reply turned int
 PASS [mixed claude->cx non-stream] other tool call kept, submit_reply turned into text
 PASS [mixed claude->gm non-stream] other tool call kept, submit_reply turned into text
 PASS [direct text responses->oa non-stream] passes through
+PASS [tool_choice none responses->oa non-stream] turn rewritten into the read result
+PASS [tool_choice none responses->oa non-stream] no reply instruction
+PASS [tool_choice none responses->oa non-stream] client gets the plain answer
 PASS [direct text chat->cl non-stream] passes through
+PASS [tool_choice none chat->cl non-stream] turn rewritten into the read result
+PASS [tool_choice none chat->cl non-stream] no reply instruction
+PASS [tool_choice none chat->cl non-stream] client gets the plain answer
 PASS [direct text claude->gm non-stream] passes through
+PASS [tool_choice none claude->gm non-stream] turn rewritten into the read result
+PASS [tool_choice none claude->gm non-stream] no reply instruction
+PASS [tool_choice none claude->gm non-stream] client gets the plain answer
 PASS [direct text responses->cx non-stream] passes through
+PASS [tool_choice none responses->cx non-stream] turn rewritten into the read result
+PASS [tool_choice none responses->cx non-stream] no reply instruction
+PASS [tool_choice none responses->cx non-stream] client gets the plain answer
 PASS [reread responses->oa non-stream] two upstream requests, the second with the call answered
 PASS [reread responses->oa non-stream] client gets only the reply
 PASS [reread chat->cl non-stream] two upstream requests, the second with the call answered
@@ -259,9 +271,21 @@ PASS [mixed claude->cl stream] other tool call kept, submit_reply turned into te
 PASS [mixed claude->cx stream] other tool call kept, submit_reply turned into text
 PASS [mixed claude->gm stream] other tool call kept, submit_reply turned into text
 PASS [direct text responses->oa stream] passes through
+PASS [tool_choice none responses->oa stream] turn rewritten into the read result
+PASS [tool_choice none responses->oa stream] no reply instruction
+PASS [tool_choice none responses->oa stream] client gets the plain answer
 PASS [direct text chat->cl stream] passes through
+PASS [tool_choice none chat->cl stream] turn rewritten into the read result
+PASS [tool_choice none chat->cl stream] no reply instruction
+PASS [tool_choice none chat->cl stream] client gets the plain answer
 PASS [direct text claude->gm stream] passes through
+PASS [tool_choice none claude->gm stream] turn rewritten into the read result
+PASS [tool_choice none claude->gm stream] no reply instruction
+PASS [tool_choice none claude->gm stream] client gets the plain answer
 PASS [direct text responses->cx stream] passes through
+PASS [tool_choice none responses->cx stream] turn rewritten into the read result
+PASS [tool_choice none responses->cx stream] no reply instruction
+PASS [tool_choice none responses->cx stream] client gets the plain answer
 PASS [reread responses->oa stream] two upstream requests, the second with the call answered
 PASS [reread responses->oa stream] client gets only the reply
 PASS [reread chat->cl stream] two upstream requests, the second with the call answered
@@ -282,5 +306,15 @@ PASS [reject responses->gm stream] first attempt had the read result, resent onc
 PASS [reject responses->gm stream] client gets the plain answer
 PASS [reject chat->cx stream] first attempt had the read result, resent once as the original
 PASS [reject chat->cx stream] client gets the plain answer
+PASS [recent] needs the management key
+PASS [recent] file-oa-reply non-stream: inbound rewritten, reply tool, reads 0
+PASS [recent] file-cx-reply stream: inbound rewritten, reply tool, reads 0
+PASS [recent] file-cl-text non-stream: inbound rewritten, reply plain, reads 0
+PASS [recent] file-oa-reread stream: inbound rewritten, reply tool, reads 1
+PASS [recent] file-oa-reject non-stream: inbound fallback, reply pass, reads 0
+PASS [recent] newest first, unprefixed requests not recorded, size 20
+PASS [recent] client recorded (User-Agent)
+PASS [recent] no bodies in the records
+PASS [recent] management page served, no data inside
 
-SUMMARY: 283/283 passed
+SUMMARY: 317/317 passed

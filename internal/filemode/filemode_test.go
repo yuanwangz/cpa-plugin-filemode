@@ -455,7 +455,7 @@ func TestResponsesStreamSplitEventAndDataChunks(t *testing.T) {
 	}
 }
 
-func TestToolChoiceNoneKeepsToolTable(t *testing.T) {
+func TestToolChoiceNoneRewritesWithoutInstruction(t *testing.T) {
 	o := DefaultOptions()
 	cases := []struct {
 		format, body, msgs, toolName string
@@ -463,23 +463,35 @@ func TestToolChoiceNoneKeepsToolTable(t *testing.T) {
 		{FormatClaude, `{"messages":[{"role":"user","content":"x"}],"tools":[{"name":"Read","input_schema":{}}],"tool_choice":{"type":"none"}}`, "messages", "name"},
 		{FormatChat, `{"messages":[{"role":"user","content":"x"}],"tools":[{"type":"function","function":{"name":"shell"}}],"tool_choice":"none"}`, "messages", "function.name"},
 		{FormatResponses, `{"input":[{"type":"message","role":"user","content":"x"}],"tools":[{"type":"function","name":"shell"}],"tool_choice":"none"}`, "input", "name"},
+		// no client tools at all
+		{FormatChat, `{"messages":[{"role":"user","content":"x"}],"tool_choice":"none"}`, "messages", "function.name"},
 	}
 	for _, c := range cases {
 		r := Rewrite(c.format, []byte(c.body), o)
-		if r.Rewritten || !r.ToolsOnly {
+		if !r.Rewritten || !r.ToolChoiceNone || len(r.Files) != 1 || r.Files[0].Text != "x" {
 			t.Fatalf("%s: %+v", c.format, r)
 		}
-		if gjson.GetBytes(r.Body, c.msgs).Raw != gjson.Get(c.body, c.msgs).Raw {
-			t.Fatalf("%s: messages touched: %s", c.format, r.Body)
+		msgs := gjson.GetBytes(r.Body, c.msgs).Raw
+		if strings.Contains(msgs, "File mode") || strings.Contains(msgs, o.ToolName) || !strings.Contains(msgs, o.ReadTool) {
+			t.Fatalf("%s: messages %s", c.format, msgs)
 		}
-		tools := gjson.GetBytes(r.Body, "tools").Array()
-		if len(tools) != 3 || tools[1].Get(c.toolName).String() != o.ToolName || tools[2].Get(c.toolName).String() != o.ReadTool {
-			t.Fatalf("%s: tools %s", c.format, gjson.GetBytes(r.Body, "tools").Raw)
+		if gjson.GetBytes(r.Body, "tool_choice").Raw != gjson.Get(c.body, "tool_choice").Raw {
+			t.Fatalf("%s: tool_choice changed: %s", c.format, r.Body)
 		}
-		// same tool table as a rewritten request of the same client
+		// same tool table as the same request without tool_choice none
 		full := Rewrite(c.format, []byte(strings.Replace(strings.Replace(c.body, `,"tool_choice":"none"`, "", 1), `,"tool_choice":{"type":"none"}`, "", 1)), o)
-		if !full.Rewritten || gjson.GetBytes(full.Body, "tools").Raw != gjson.GetBytes(r.Body, "tools").Raw {
+		if !full.Rewritten || full.ToolChoiceNone || gjson.GetBytes(full.Body, "tools").Raw != gjson.GetBytes(r.Body, "tools").Raw {
 			t.Fatalf("%s: tool table differs\n%s\n%s", c.format, gjson.GetBytes(full.Body, "tools").Raw, gjson.GetBytes(r.Body, "tools").Raw)
+		}
+		if !strings.Contains(gjson.GetBytes(full.Body, c.msgs).Raw, "File mode") {
+			t.Fatalf("%s: instruction missing without tool_choice none", c.format)
+		}
+	}
+	// tool_choice auto / required are not "none"
+	for _, tc := range []string{`"auto"`, `"required"`, `{"type":"auto"}`} {
+		r := Rewrite(FormatChat, []byte(`{"messages":[{"role":"user","content":"x"}],"tool_choice":`+tc+`}`), o)
+		if !r.Rewritten || r.ToolChoiceNone {
+			t.Fatalf("%s: %+v", tc, r)
 		}
 	}
 }
@@ -513,8 +525,8 @@ func TestNoReplyInjectsOnlyTheReadTool(t *testing.T) {
 			none = strings.Replace(c.body, `}]}`, `}],"tool_choice":{"type":"none"}}`, 1)
 		}
 		n := Rewrite(c.format, []byte(none), o)
-		if !n.ToolsOnly || gjson.GetBytes(n.Body, "tools").Raw != gjson.GetBytes(r.Body, "tools").Raw {
-			t.Fatalf("%s: tools only %s", c.format, n.Body)
+		if !n.Rewritten || !n.ToolChoiceNone || gjson.GetBytes(n.Body, "tools").Raw != gjson.GetBytes(r.Body, "tools").Raw || gjson.GetBytes(n.Body, c.msgs).Raw != gjson.GetBytes(r.Body, c.msgs).Raw {
+			t.Fatalf("%s: tool_choice none %s", c.format, n.Body)
 		}
 	}
 	// a client tool that shares the reply tool's name no longer blocks the rewrite

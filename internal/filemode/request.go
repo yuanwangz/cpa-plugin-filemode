@@ -21,23 +21,11 @@ type RewriteResult struct {
 	Rewritten bool   // tools injected (and possibly texts moved into files)
 	Files     []File // the files of the turn, in order
 	Reason    string // why nothing was done, when Rewritten is false
-	// ToolsOnly: the messages were left alone but the reply and read tools
-	// were still appended (tool_choice none), so the tool table, which comes
-	// first in the upstream prefix, stays the same as on rewritten requests
-	// and the prefix cache holds.
-	ToolsOnly bool
-}
-
-// toolsOnly appends the injected tools to an otherwise untouched request.
-func toolsOnly(body []byte, tools []string, reason string) RewriteResult {
-	nb := body
-	var err error
-	for _, t := range tools {
-		if nb, err = appendTool(nb, t); err != nil {
-			return RewriteResult{Body: body, Reason: reason}
-		}
-	}
-	return RewriteResult{Body: nb, ToolsOnly: true, Reason: reason + " (tools only)"}
+	// ToolChoiceNone: the client sent tool_choice none. The turn is rewritten
+	// and the tool table is the same as usual (so the upstream prefix cache
+	// holds), but the reply instruction is left out: the model cannot call any
+	// tool on this request and answers in plain text.
+	ToolChoiceNone bool
 }
 
 // SetModel sets the top-level "model" field of a request body.
@@ -264,6 +252,25 @@ func insertAfter(items []string, k int, extra ...string) []string {
 	return append(out, items[k+1:]...)
 }
 
+// toolChoiceNone reports whether the client forbade tool calls on this request
+// ("none" in OpenAI Chat and Responses, {"type":"none"} in Claude).
+func toolChoiceNone(root gjson.Result) bool {
+	tc := root.Get("tool_choice")
+	if tc.Type == gjson.String {
+		return tc.String() == "none"
+	}
+	return tc.Get("type").String() == "none"
+}
+
+// msgOptions are the options the turn is moved with: on a tool_choice none
+// request the reply instruction is left out, since no tool can be called.
+func msgOptions(o Options, none bool) Options {
+	if none {
+		o.noInstruction = true
+	}
+	return o
+}
+
 // clientUsesTool reports whether the client declared a tool of that name.
 func clientUsesTool(root gjson.Result, names ...string) bool {
 	for _, t := range root.Get("tools").Array() {
@@ -319,9 +326,7 @@ func rewriteResponses(body []byte, o Options) RewriteResult {
 	if clientUsesTool(root, o.ownTools()...) {
 		return RewriteResult{Body: body, Reason: "tool name already used by client"}
 	}
-	if tc := root.Get("tool_choice"); tc.Type == gjson.String && tc.String() == "none" {
-		return toolsOnly(body, responsesTools(o), "tool_choice none")
-	}
+	none := toolChoiceNone(root)
 	input := root.Get("input")
 	var items []gjson.Result
 	switch {
@@ -355,7 +360,7 @@ func rewriteResponses(body []byte, o Options) RewriteResult {
 	if len(idx) == 0 {
 		return RewriteResult{Body: body, Reason: "no user message"}
 	}
-	out, files, _ := moveTurn(o, items, idx, map[string]bool{"input_text": true, "text": true}, "input_text")
+	out, files, _ := moveTurn(msgOptions(o, none), items, idx, map[string]bool{"input_text": true, "text": true}, "input_text")
 	if len(files) > 0 {
 		out = insertAfter(out, idx[len(idx)-1], ResponsesReadItems(o, ReadCallID(1), "{}", ReadResult(files, "{}"))...)
 	}
@@ -368,7 +373,7 @@ func rewriteResponses(body []byte, o Options) RewriteResult {
 			return RewriteResult{Body: body, Reason: err.Error()}
 		}
 	}
-	return RewriteResult{Body: nb, Rewritten: true, Files: files}
+	return RewriteResult{Body: nb, Rewritten: true, Files: files, ToolChoiceNone: none}
 }
 
 func appendTool(body []byte, tool string) ([]byte, error) {
@@ -394,9 +399,7 @@ func rewriteChat(body []byte, o Options) RewriteResult {
 	if clientUsesTool(root, o.ownTools()...) {
 		return RewriteResult{Body: body, Reason: "tool name already used by client"}
 	}
-	if tc := root.Get("tool_choice"); tc.Type == gjson.String && tc.String() == "none" {
-		return toolsOnly(body, chatTools(o), "tool_choice none")
-	}
+	none := toolChoiceNone(root)
 	items := root.Get("messages").Array()
 	isUser := func(m gjson.Result) bool { return m.Get("role").String() == "user" }
 	isSys := func(m gjson.Result) bool {
@@ -412,7 +415,7 @@ func rewriteChat(body []byte, o Options) RewriteResult {
 	if len(idx) == 0 {
 		return RewriteResult{Body: body, Reason: "no user message"}
 	}
-	out, files, _ := moveTurn(o, items, idx, map[string]bool{"text": true}, "text")
+	out, files, _ := moveTurn(msgOptions(o, none), items, idx, map[string]bool{"text": true}, "text")
 	if len(files) > 0 {
 		out = insertAfter(out, idx[len(idx)-1], ChatReadMessages(o, ReadCallID(1), "{}", ReadResult(files, "{}"))...)
 	}
@@ -425,7 +428,7 @@ func rewriteChat(body []byte, o Options) RewriteResult {
 			return RewriteResult{Body: body, Reason: err.Error()}
 		}
 	}
-	return RewriteResult{Body: nb, Rewritten: true, Files: files}
+	return RewriteResult{Body: nb, Rewritten: true, Files: files, ToolChoiceNone: none}
 }
 
 // ---------- Claude Messages ----------
@@ -455,9 +458,7 @@ func rewriteClaude(body []byte, o Options) RewriteResult {
 	if clientUsesTool(root, o.ownTools()...) {
 		return RewriteResult{Body: body, Reason: "tool name already used by client"}
 	}
-	if root.Get("tool_choice.type").String() == "none" {
-		return toolsOnly(body, claudeTools(o), "tool_choice none")
-	}
+	none := toolChoiceNone(root)
 	items := root.Get("messages").Array()
 	// a user message holding only tool_result blocks is a tool-loop step, not a new message
 	isUser := func(m gjson.Result) bool {
@@ -499,7 +500,7 @@ func rewriteClaude(body []byte, o Options) RewriteResult {
 	if len(idx) == 0 {
 		return RewriteResult{Body: body, Reason: "no user message"}
 	}
-	out, files, cache := moveTurn(o, items, idx, map[string]bool{"text": true}, "text")
+	out, files, cache := moveTurn(msgOptions(o, none), items, idx, map[string]bool{"text": true}, "text")
 	if len(files) > 0 {
 		out = insertAfter(out, idx[len(idx)-1], ClaudeReadMessages(o, ReadCallID(1), "{}", ReadResult(files, "{}"), cache)...)
 	}
@@ -512,7 +513,7 @@ func rewriteClaude(body []byte, o Options) RewriteResult {
 			return RewriteResult{Body: body, Reason: err.Error()}
 		}
 	}
-	return RewriteResult{Body: nb, Rewritten: true, Files: files}
+	return RewriteResult{Body: nb, Rewritten: true, Files: files, ToolChoiceNone: none}
 }
 
 // AppendReadCall adds one more read call and its result at the end of a

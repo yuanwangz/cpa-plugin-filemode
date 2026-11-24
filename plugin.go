@@ -381,25 +381,26 @@ func prepare(raw []byte, record bool) (*prepared, []byte) {
 	p.original = filemode.SetModel(req.Payload, model)
 	p.rewrite = filemode.Rewrite(format, p.original, cfg.options())
 	p.send = p.original
-	if p.rewrite.Rewritten || p.rewrite.ToolsOnly {
+	if p.rewrite.Rewritten {
 		p.send = p.rewrite.Body
 	}
 	if record {
 		in, reply := recent.InRewritten, recent.ReplyPending
 		switch {
-		case p.rewrite.ToolsOnly:
-			in = recent.InToolsOnly
 		case !p.rewrite.Rewritten:
 			in = recent.InSkipped
 		}
 		p.rec = history.Start(recent.Record{
 			Model: strings.TrimSpace(req.Model), Format: format, Stream: req.Stream,
 			Client:  recent.Clip(req.Headers.Get("User-Agent"), 80),
-			Inbound: in, Note: p.rewrite.Reason, Files: len(p.rewrite.Files), Reply: reply,
-			ReplyTool: cfg.replyTool, // the switch as it was for this request; the page judges by it
+			Inbound: in, Note: p.rewrite.Reason, ToolChoiceNone: p.rewrite.ToolChoiceNone, Files: len(p.rewrite.Files), Reply: reply,
+			// the switch as it was for this request; the page judges by it. A
+			// tool_choice none request cannot call the reply tool, so its plain
+			// answer is judged as with the switch off.
+			ReplyTool: cfg.replyTool && !p.rewrite.ToolChoiceNone,
 		})
 	}
-	logf(cfg, "info", "request", map[string]any{"id": p.recID(), "format": format, "model": model, "stream": req.Stream, "rewritten": p.rewrite.Rewritten, "files": len(p.rewrite.Files), "skip_reason": p.rewrite.Reason})
+	logf(cfg, "info", "request", map[string]any{"id": p.recID(), "format": format, "model": model, "stream": req.Stream, "rewritten": p.rewrite.Rewritten, "files": len(p.rewrite.Files), "tool_choice_none": p.rewrite.ToolChoiceNone, "skip_reason": p.rewrite.Reason})
 	return p, nil
 }
 
@@ -435,7 +436,7 @@ func (p *prepared) replied(rewritten, viaTool bool) {
 	reply := recent.ReplyPass
 	if rewritten {
 		reply = recent.ReplyPlain
-		if !p.cfg.replyTool {
+		if !p.cfg.replyTool || p.rewrite.ToolChoiceNone {
 			reply = recent.ReplyText
 		}
 		if viaTool {
@@ -508,7 +509,7 @@ func execute(raw []byte) []byte {
 	rewritten := p.rewrite.Rewritten
 	send := p.send
 	resp, err := hostExecute(p.hostRequest(send, false))
-	if err != nil && (rewritten || p.rewrite.ToolsOnly) && p.cfg.fallback && rejected(err) {
+	if err != nil && rewritten && p.cfg.fallback && rejected(err) {
 		logf(p.cfg, "warn", "upstream rejected the file-mode request, resending the original once", map[string]any{"id": p.recID(), "format": p.format, "model": p.model, "error": truncate(err.Error(), 300)})
 		p.fellBack(err)
 		rewritten = false
@@ -605,7 +606,7 @@ func executeStream(raw []byte) []byte {
 	}
 	rewritten := p.rewrite.Rewritten
 	resp, err := hostStream(p.hostRequest(p.send, true))
-	if err != nil && (rewritten || p.rewrite.ToolsOnly) && p.cfg.fallback && rejected(err) {
+	if err != nil && rewritten && p.cfg.fallback && rejected(err) {
 		logf(p.cfg, "warn", "upstream rejected the file-mode request, resending the original once", map[string]any{"id": p.recID(), "format": p.format, "model": p.model, "error": truncate(err.Error(), 300)})
 		p.fellBack(err)
 		rewritten = false

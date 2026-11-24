@@ -120,14 +120,14 @@ const tag=(k,t)=>'<span class="tag t-'+k+'">'+esc(t)+'</span>';
 let records=[],size=0,filter='all',open=new Set(),timer=null,busy=false;
 const V={ok:['ok','正常'],warn:['warn','注意'],bad:['bad','失败'],dim:['dim','未生效'],run:['info','进行中']};
 function verdict(r){if(r.reply==='error')return'bad';if(r.reply==='pending')return'run';
- if(r.inbound==='rewritten'&&(r.reply_tool?r.reply==='tool':(r.reply==='text'||r.reply==='plain')))return'ok';if(r.inbound==='skipped'||r.inbound==='tools_only')return'dim';return'warn';}
+ if(r.inbound==='rewritten'&&(r.reply_tool?r.reply==='tool':(r.reply==='text'||r.reply==='plain')))return'ok';if(r.inbound==='skipped')return'dim';return'warn';}
 function inbound(r){switch(r.inbound){
  case'rewritten':return['改写成 '+r.files+' 个文件',r.reads?'模型又读了 '+r.reads+' 次':'消息走读取工具送达'];
- case'tools_only':return['只补了工具表','tool_choice=none，不改写消息，保住前缀缓存'];
+ 
  case'fallback':return['被上游拒绝，已退回原请求',r.note||''];
  default:return['未改写',r.note||''];}}
 function reply(r){switch(r.reply){
- case'tool':return['回复工具已还原成文字',''];case'plain':return r.reply_tool?['模型直接回了文字','没走回复工具，原样转发']:['文字回复','这次回复工具是关的'];case'text':return['文字回复','这次回复工具是关的'];
+ case'tool':return['回复工具已还原成文字',''];case'plain':return r.reply_tool?['模型直接回了文字','没走回复工具，原样转发']:['文字回复','这次回复工具是关的'];case'text':return['文字回复',r.tool_choice_none?'tool_choice=none，这次不能调工具':'这次回复工具是关的'];
  case'pass':return['原样转发',''];case'pending':return['等待上游…',''];
  default:return['出错'+(r.status?' · HTTP '+r.status:''),r.error||''];}}
 function ago(t){const s=(Date.now()-new Date(t))/1000;if(s<60)return'刚刚';if(s<3600)return Math.floor(s/60)+' 分钟前';if(s<86400)return Math.floor(s/3600)+' 小时前';return new Date(t).toLocaleDateString();}
