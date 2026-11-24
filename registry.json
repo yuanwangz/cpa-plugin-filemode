@@ -6,7 +6,7 @@
       "name": "File Mode",
       "description": "For models requested with a configurable prefix (default file-), replaces the text of the new user turn with file names answered by a read_message call the model has already made, and turns the model's submit_reply tool call back into a plain text reply. Works across OpenAI-compatible, Codex, Claude and Gemini upstreams. Keeps the last few file-mode requests in memory (inbound and reply verdicts) for a management menu page.",
       "author": "yuanwangz",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "repository": "https://github.com/yuanwangz/cpa-plugin-filemode",
       "homepage": "https://github.com/yuanwangz/cpa-plugin-filemode",
       "tags": [
