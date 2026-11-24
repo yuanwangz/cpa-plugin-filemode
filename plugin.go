@@ -394,10 +394,7 @@ func prepare(raw []byte, record bool) (*prepared, []byte) {
 			Model: strings.TrimSpace(req.Model), Format: format, Stream: req.Stream,
 			Client:  recent.Clip(req.Headers.Get("User-Agent"), 80),
 			Inbound: in, Note: p.rewrite.Reason, ToolChoiceNone: p.rewrite.ToolChoiceNone, Files: len(p.rewrite.Files), Reply: reply,
-			// the switch as it was for this request; the page judges by it. A
-			// tool_choice none request cannot call the reply tool, so its plain
-			// answer is judged as with the switch off.
-			ReplyTool: cfg.replyTool && !p.rewrite.ToolChoiceNone,
+			ReplyTool: cfg.replyTool, // the switch as it was for this request; the page judges by it
 		})
 	}
 	logf(cfg, "info", "request", map[string]any{"id": p.recID(), "format": format, "model": model, "stream": req.Stream, "rewritten": p.rewrite.Rewritten, "files": len(p.rewrite.Files), "tool_choice_none": p.rewrite.ToolChoiceNone, "skip_reason": p.rewrite.Reason})
@@ -436,7 +433,7 @@ func (p *prepared) replied(rewritten, viaTool bool) {
 	reply := recent.ReplyPass
 	if rewritten {
 		reply = recent.ReplyPlain
-		if !p.cfg.replyTool || p.rewrite.ToolChoiceNone {
+		if !p.cfg.replyTool {
 			reply = recent.ReplyText
 		}
 		if viaTool {

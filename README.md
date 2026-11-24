@@ -23,7 +23,7 @@ CLIProxyAPI（CPA，[router-for-me/CLIProxyAPI](https://github.com/router-for-me
 
 正文走的是工具调用和工具返回，CPA 内置翻译器对每种上游都会转（OpenAI 兼容的 `tool` 消息、Codex 的 `function_call_output`、Claude 的 `tool_result`、Gemini 的 `functionResponse`），所以不再需要翻译后的附件修补（旧版的 `request_normalizer` 和 Claude→Codex 退回内联都去掉了）。
 
-前缀缓存：只改写最新一轮，注入的两个工具每次都按同样字节追加在工具表末尾，补的读调用 id 固定（`call_filemode_read_1`），本轮的起点钉在最后一条回复之后，循环中途进来的 user 消息不会把本轮挪走，所以同一轮工具循环的各步前缀一致。`tool_choice: none` 的请求照样改写（本轮正文进读取结果），工具表也和平时一样，只是不加「用回复工具回复」那句说明：这次模型调不了工具，直接回文字原样转发。因为少了这句，这一步本轮用户消息的字节和同轮其它步不同，前缀缓存从这条消息起断开（工具表和更早的历史仍命中）。进入新一轮时，上一轮从「文件 + 读取」变回原文，缓存从上一轮的用户消息起断开，这是只改写最新一轮的代价。
+前缀缓存：只改写最新一轮，注入的两个工具每次都按同样字节追加在工具表末尾，补的读调用 id 固定（`call_filemode_read_1`），本轮的起点钉在最后一条回复之后，循环中途进来的 user 消息不会把本轮挪走，所以同一轮工具循环的各步前缀一致。`tool_choice: none` 的请求照样改写，消息和工具表与平时完全一样；回复工具开着时插件把 tool_choice 改成 auto 送上游（不然上游连插件的工具也不让调），模型照说明走回复工具；回复工具关着时 none 原样保留。进入新一轮时，上一轮从「文件 + 读取」变回原文，缓存从上一轮的用户消息起断开，这是只改写最新一轮的代价。
 
 为什么不用 `request_interceptor` / `response_interceptor` / `response_stream_interceptor`：
 
@@ -122,7 +122,7 @@ CPA 本体也必须是 CGO 构建（管理接口响应头 `X-CPA-SUPPORT-PLUGIN:
 ## 测试
 
 - `internal/recent/*_test.go`：环形记录（最新在前、缩容、0 = 不记）、错误截断、菜单页嵌入接口路径。
-- `internal/filemode/*_test.go`：请求改写（三种格式、轮次判定、工具循环里补的调用位置、`tool_choice: none` 照样改写、不加回复说明且工具表和平时一致、重名工具、cache_control 挪到工具返回上）、读工具的返回和追加、非流式里「只调了读工具」的判定、流式闸门、非流式和三种流式还原（含混合调用、读调用去掉、工具序号重排、Codex 的 event/data 分块）。
+- `internal/filemode/*_test.go`：请求改写（三种格式、轮次判定、工具循环里补的调用位置、`tool_choice: none` 照样改写、回复工具开着时改为 auto、关着时保留 none、重名工具、cache_control 挪到工具返回上）、读工具的返回和追加、非流式里「只调了读工具」的判定、流式闸门、非流式和三种流式还原（含混合调用、读调用去掉、工具序号重排、Codex 的 event/data 分块）。
 - `test/e2e/`：`mock_upstream.py` 同时扮演 OpenAI 兼容、Codex、Claude、Gemini 四种上游；`e2e_test.py` 覆盖不带前缀原样、带前缀剥离 + 正文只在读工具返回里 + 注入工具、非流式和流式还原、混合调用、直接回文字、模型再调读工具（重发一次、客户端只见回复）、被拒回退、`/v1/models`、Gemini 客户端格式、最近请求记录（要管理密钥、各种结论、不记不带前缀的请求、不含正文、菜单页不带数据）。
 
 ## 限制

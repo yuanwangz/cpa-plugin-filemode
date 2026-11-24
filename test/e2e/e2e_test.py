@@ -259,9 +259,9 @@ def test_text(fmt, up, stream):
 
 
 def test_tool_choice_none(fmt, up, stream):
-    """tool_choice none still goes in file mode: the turn travels as the read result, without the reply instruction."""
+    """tool_choice none goes in file mode too: sent up as auto, the model answers through submit_reply."""
     n = mark()
-    path, body = body_for(fmt, "file-%s-text" % up, TXT, stream)
+    path, body = body_for(fmt, "file-%s-reply" % up, TXT, stream)
     if fmt == "claude":
         body["tools"] = [{"name": "list_dir", "input_schema": {"type": "object"}}]
         body["tool_choice"] = {"type": "none"}
@@ -277,9 +277,9 @@ def test_tool_choice_none(fmt, up, stream):
     tag = "%s->%s %s" % (fmt, up, "stream" if stream else "non-stream")
     rec = ups[0] if ups else {"body": {}}
     s = json.dumps(rec["body"], ensure_ascii=False)
-    check("[tool_choice none %s] turn rewritten into the read result" % tag, len(ups) == 1 and text_moved_ok(rec), s[:1500])
-    check("[tool_choice none %s] no reply instruction" % tag, "File mode" not in s, s[:1500])
-    check("[tool_choice none %s] client gets the plain answer" % tag, st == 200 and text == "plain text answer" and not tools and "read_message" not in raw, (st, raw[:400]))
+    check("[tool_choice none %s] turn rewritten, instruction kept" % tag, len(ups) == 1 and text_moved_ok(rec) and "pass it to the submit_reply tool" in s, s[:1500])
+    check("[tool_choice none %s] none not sent up" % tag, '"none"' not in s and "'NONE'" not in s and '"NONE"' not in s, s[-800:])
+    check("[tool_choice none %s] reply restored as plain text" % tag, st == 200 and text == "ECHO:" + TXT and not tools and TOOL not in raw and "read_message" not in raw, (st, text, raw[:600]))
 
 
 def test_reject(fmt, up, stream):

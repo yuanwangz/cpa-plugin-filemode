@@ -39,8 +39,6 @@ type Options struct {
 	ReadTool    string // the read tool; its call and result are added after the turn
 	ReadDesc    string
 	NoReply     bool // reply tool off: neither the reply tool nor the instruction is injected; the model answers in plain text
-
-	noInstruction bool // this request only: the turn goes without the reply instruction (tool_choice none)
 }
 
 // DefaultOptions returns the options used by the plugin unless configured.
@@ -76,7 +74,7 @@ func (o Options) placeholder(name string) string {
 }
 
 func (o Options) instruction() string {
-	if o.NoReply || o.noInstruction {
+	if o.NoReply {
 		return ""
 	}
 	return strings.ReplaceAll(o.Instruction, "{tool}", o.ToolName)

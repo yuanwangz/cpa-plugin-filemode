@@ -22,9 +22,9 @@ type RewriteResult struct {
 	Files     []File // the files of the turn, in order
 	Reason    string // why nothing was done, when Rewritten is false
 	// ToolChoiceNone: the client sent tool_choice none. The turn is rewritten
-	// and the tool table is the same as usual (so the upstream prefix cache
-	// holds), but the reply instruction is left out: the model cannot call any
-	// tool on this request and answers in plain text.
+	// as usual; with the reply tool on, tool_choice goes up as auto so the
+	// model can reach the reply tool (the instruction says when to use it),
+	// with the reply tool off it stays none.
 	ToolChoiceNone bool
 }
 
@@ -262,13 +262,18 @@ func toolChoiceNone(root gjson.Result) bool {
 	return tc.Get("type").String() == "none"
 }
 
-// msgOptions are the options the turn is moved with: on a tool_choice none
-// request the reply instruction is left out, since no tool can be called.
-func msgOptions(o Options, none bool) Options {
-	if none {
-		o.noInstruction = true
+// openToolChoice lifts a client's tool_choice none to auto when the reply tool
+// is injected, so the model can answer through it. auto is the form each
+// format accepts ("auto" in OpenAI Chat and Responses, {"type":"auto"} in
+// Claude); a Claude none that carried disable_parallel_tool_use keeps it.
+func openToolChoice(format string, body []byte, o Options, none bool) ([]byte, error) {
+	if !none || o.NoReply {
+		return body, nil
 	}
-	return o
+	if format == FormatClaude {
+		return sjson.SetBytes(body, "tool_choice.type", "auto")
+	}
+	return sjson.SetBytes(body, "tool_choice", "auto")
 }
 
 // clientUsesTool reports whether the client declared a tool of that name.
@@ -360,12 +365,15 @@ func rewriteResponses(body []byte, o Options) RewriteResult {
 	if len(idx) == 0 {
 		return RewriteResult{Body: body, Reason: "no user message"}
 	}
-	out, files, _ := moveTurn(msgOptions(o, none), items, idx, map[string]bool{"input_text": true, "text": true}, "input_text")
+	out, files, _ := moveTurn(o, items, idx, map[string]bool{"input_text": true, "text": true}, "input_text")
 	if len(files) > 0 {
 		out = insertAfter(out, idx[len(idx)-1], ResponsesReadItems(o, ReadCallID(1), "{}", ReadResult(files, "{}"))...)
 	}
 	nb, err := sjson.SetRawBytes(body, "input", []byte(joinArray(out)))
 	if err != nil {
+		return RewriteResult{Body: body, Reason: err.Error()}
+	}
+	if nb, err = openToolChoice(FormatResponses, nb, o, none); err != nil {
 		return RewriteResult{Body: body, Reason: err.Error()}
 	}
 	for _, t := range responsesTools(o) {
@@ -415,12 +423,15 @@ func rewriteChat(body []byte, o Options) RewriteResult {
 	if len(idx) == 0 {
 		return RewriteResult{Body: body, Reason: "no user message"}
 	}
-	out, files, _ := moveTurn(msgOptions(o, none), items, idx, map[string]bool{"text": true}, "text")
+	out, files, _ := moveTurn(o, items, idx, map[string]bool{"text": true}, "text")
 	if len(files) > 0 {
 		out = insertAfter(out, idx[len(idx)-1], ChatReadMessages(o, ReadCallID(1), "{}", ReadResult(files, "{}"))...)
 	}
 	nb, err := sjson.SetRawBytes(body, "messages", []byte(joinArray(out)))
 	if err != nil {
+		return RewriteResult{Body: body, Reason: err.Error()}
+	}
+	if nb, err = openToolChoice(FormatChat, nb, o, none); err != nil {
 		return RewriteResult{Body: body, Reason: err.Error()}
 	}
 	for _, t := range chatTools(o) {
@@ -500,12 +511,15 @@ func rewriteClaude(body []byte, o Options) RewriteResult {
 	if len(idx) == 0 {
 		return RewriteResult{Body: body, Reason: "no user message"}
 	}
-	out, files, cache := moveTurn(msgOptions(o, none), items, idx, map[string]bool{"text": true}, "text")
+	out, files, cache := moveTurn(o, items, idx, map[string]bool{"text": true}, "text")
 	if len(files) > 0 {
 		out = insertAfter(out, idx[len(idx)-1], ClaudeReadMessages(o, ReadCallID(1), "{}", ReadResult(files, "{}"), cache)...)
 	}
 	nb, err := sjson.SetRawBytes(body, "messages", []byte(joinArray(out)))
 	if err != nil {
+		return RewriteResult{Body: body, Reason: err.Error()}
+	}
+	if nb, err = openToolChoice(FormatClaude, nb, o, none); err != nil {
 		return RewriteResult{Body: body, Reason: err.Error()}
 	}
 	for _, t := range claudeTools(o) {

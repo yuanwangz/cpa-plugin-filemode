@@ -221,21 +221,21 @@ PASS [mixed claude->cl non-stream] other tool call kept, submit_reply turned int
 PASS [mixed claude->cx non-stream] other tool call kept, submit_reply turned into text
 PASS [mixed claude->gm non-stream] other tool call kept, submit_reply turned into text
 PASS [direct text responses->oa non-stream] passes through
-PASS [tool_choice none responses->oa non-stream] turn rewritten into the read result
-PASS [tool_choice none responses->oa non-stream] no reply instruction
-PASS [tool_choice none responses->oa non-stream] client gets the plain answer
+PASS [tool_choice none responses->oa non-stream] turn rewritten, instruction kept
+PASS [tool_choice none responses->oa non-stream] none not sent up
+PASS [tool_choice none responses->oa non-stream] reply restored as plain text
 PASS [direct text chat->cl non-stream] passes through
-PASS [tool_choice none chat->cl non-stream] turn rewritten into the read result
-PASS [tool_choice none chat->cl non-stream] no reply instruction
-PASS [tool_choice none chat->cl non-stream] client gets the plain answer
+PASS [tool_choice none chat->cl non-stream] turn rewritten, instruction kept
+PASS [tool_choice none chat->cl non-stream] none not sent up
+PASS [tool_choice none chat->cl non-stream] reply restored as plain text
 PASS [direct text claude->gm non-stream] passes through
-PASS [tool_choice none claude->gm non-stream] turn rewritten into the read result
-PASS [tool_choice none claude->gm non-stream] no reply instruction
-PASS [tool_choice none claude->gm non-stream] client gets the plain answer
+PASS [tool_choice none claude->gm non-stream] turn rewritten, instruction kept
+PASS [tool_choice none claude->gm non-stream] none not sent up
+PASS [tool_choice none claude->gm non-stream] reply restored as plain text
 PASS [direct text responses->cx non-stream] passes through
-PASS [tool_choice none responses->cx non-stream] turn rewritten into the read result
-PASS [tool_choice none responses->cx non-stream] no reply instruction
-PASS [tool_choice none responses->cx non-stream] client gets the plain answer
+PASS [tool_choice none responses->cx non-stream] turn rewritten, instruction kept
+PASS [tool_choice none responses->cx non-stream] none not sent up
+PASS [tool_choice none responses->cx non-stream] reply restored as plain text
 PASS [reread responses->oa non-stream] two upstream requests, the second with the call answered
 PASS [reread responses->oa non-stream] client gets only the reply
 PASS [reread chat->cl non-stream] two upstream requests, the second with the call answered
@@ -271,21 +271,21 @@ PASS [mixed claude->cl stream] other tool call kept, submit_reply turned into te
 PASS [mixed claude->cx stream] other tool call kept, submit_reply turned into text
 PASS [mixed claude->gm stream] other tool call kept, submit_reply turned into text
 PASS [direct text responses->oa stream] passes through
-PASS [tool_choice none responses->oa stream] turn rewritten into the read result
-PASS [tool_choice none responses->oa stream] no reply instruction
-PASS [tool_choice none responses->oa stream] client gets the plain answer
+PASS [tool_choice none responses->oa stream] turn rewritten, instruction kept
+PASS [tool_choice none responses->oa stream] none not sent up
+PASS [tool_choice none responses->oa stream] reply restored as plain text
 PASS [direct text chat->cl stream] passes through
-PASS [tool_choice none chat->cl stream] turn rewritten into the read result
-PASS [tool_choice none chat->cl stream] no reply instruction
-PASS [tool_choice none chat->cl stream] client gets the plain answer
+PASS [tool_choice none chat->cl stream] turn rewritten, instruction kept
+PASS [tool_choice none chat->cl stream] none not sent up
+PASS [tool_choice none chat->cl stream] reply restored as plain text
 PASS [direct text claude->gm stream] passes through
-PASS [tool_choice none claude->gm stream] turn rewritten into the read result
-PASS [tool_choice none claude->gm stream] no reply instruction
-PASS [tool_choice none claude->gm stream] client gets the plain answer
+PASS [tool_choice none claude->gm stream] turn rewritten, instruction kept
+PASS [tool_choice none claude->gm stream] none not sent up
+PASS [tool_choice none claude->gm stream] reply restored as plain text
 PASS [direct text responses->cx stream] passes through
-PASS [tool_choice none responses->cx stream] turn rewritten into the read result
-PASS [tool_choice none responses->cx stream] no reply instruction
-PASS [tool_choice none responses->cx stream] client gets the plain answer
+PASS [tool_choice none responses->cx stream] turn rewritten, instruction kept
+PASS [tool_choice none responses->cx stream] none not sent up
+PASS [tool_choice none responses->cx stream] reply restored as plain text
 PASS [reread responses->oa stream] two upstream requests, the second with the call answered
 PASS [reread responses->oa stream] client gets only the reply
 PASS [reread chat->cl stream] two upstream requests, the second with the call answered
